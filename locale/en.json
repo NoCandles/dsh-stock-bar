@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Stock Ticker Bar",
+    "description": "An always-on quote strip at the top of the window: watchlist moves, share counts and cost basis, daily and total P&L, and K-line charts."
+  }
+}

@@ -1,0 +1,7 @@
+- insert:
+    - id: stock-ticker
+      name: 'dsh-stock-ticker'
+      config:
+        refreshMs: 5000
+        storePath: ''
+        topOffset: 0

@@ -1,0 +1,66 @@
+{
+  "name": "dsh-stock-ticker",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "顶部状态栏实时股票行情条：自选股、持仓成本、盈亏、K线图 · Always-on stock quotes strip at the top of the DSH window.",
+  "meta": {
+    "title": "顶部股票行情条",
+    "description": "在窗口顶部常驻的实时行情条：自选股涨跌、持仓股数与成本价、当日与总盈亏、K线图。"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "deepseek",
+    "stock",
+    "stocks",
+    "a-share",
+    "quote",
+    "ticker",
+    "kline",
+    "candlestick",
+    "portfolio"
+  ],
+  "author": "NoCandles",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NoCandles/dsh-stock-ticker.git"
+  },
+  "homepage": "https://github.com/NoCandles/dsh-stock-ticker#readme",
+  "bugs": {
+    "url": "https://github.com/NoCandles/dsh-stock-ticker/issues"
+  },
+  "main": "./lib/index.js",
+  "icon": "./icon.svg",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "icon.svg",
+    "cordis.patch.yml",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

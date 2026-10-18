@@ -1,0 +1,18 @@
+# 提交给 awesome-dsh-plugin 的条目
+#
+# 用法：把这个文件的内容存为 awesome-dsh-plugin 仓库里的
+#   data/plugins/NoCandles__dsh-stock-ticker.yml
+# 然后向 https://github.com/awesome-dsh-plugin/awesome-dsh-plugin 提一个 PR。
+# 规则见 https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md
+#
+# 注意：
+# - README 由脚本生成，**不要**手工编辑它们，只加这一个文件。
+# - 仓库需要创建满 1 天才会通过 CI 的 repo-age 检查。
+# - url 必须与仓库地址完全一致。
+
+url: https://github.com/NoCandles/dsh-stock-ticker
+name: NoCandles/dsh-stock-ticker
+category: ui
+description:
+  en: 'Always-on quotes strip pinned to the top of the DSH window: watchlist, holdings with share counts and cost price, P&L, candlestick and intraday charts, 5-level order book, trade ledger, price alerts, and streamed AI review of the selected symbol.'
+  zh: '钉在 DSH 窗口顶部的常驻行情条：自选股、带股数与成本价的持仓、盈亏、K 线与分时图、五档盘口、交易流水、价格预警，以及用 DSH 已配置模型流式生成的 AI 复盘。'

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="股票行情条">
+  <defs>
+    <linearGradient id="dstBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b3a55"/>
+      <stop offset="1" stop-color="#141b26"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#dstBg)"/>
+  <!-- 顶部行情条 -->
+  <rect x="8" y="10" width="48" height="11" rx="4" fill="#0f9d6e" opacity="0.18"/>
+  <circle cx="14" cy="15.5" r="2.4" fill="#2fd08a"/>
+  <rect x="20" y="13.5" width="13" height="4" rx="2" fill="#2fd08a"/>
+  <rect x="37" y="13.5" width="13" height="4" rx="2" fill="#ff6b6b" opacity="0.85"/>
+  <!-- K 线 -->
+  <g stroke="#4da3ff" stroke-width="2" stroke-linecap="round">
+    <line x1="14" y1="34" x2="14" y2="52"/>
+    <line x1="24" y1="30" x2="24" y2="48"/>
+    <line x1="34" y1="36" x2="34" y2="54"/>
+    <line x1="44" y1="28" x2="44" y2="45"/>
+    <line x1="52" y1="33" x2="52" y2="50"/>
+  </g>
+  <g>
+    <rect x="10.5" y="38" width="7" height="9" rx="1.5" fill="#2fd08a"/>
+    <rect x="20.5" y="34" width="7" height="10" rx="1.5" fill="#2fd08a"/>
+    <rect x="30.5" y="41" width="7" height="9" rx="1.5" fill="#ff6b6b"/>
+    <rect x="40.5" y="32" width="7" height="10" rx="1.5" fill="#2fd08a"/>
+    <rect x="48.5" y="38" width="7" height="8" rx="1.5" fill="#ff6b6b"/>
+  </g>
+</svg>
