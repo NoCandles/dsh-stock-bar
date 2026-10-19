@@ -1,5 +1,5 @@
 /**
- * dsh-stock-ticker / scripts/verify-client.mjs
+ * dsh-stock-bar / scripts/verify-client.mjs
  *
  * Client(浏览器)半边自检：在 Node 里用一套最小的 React + DOM 替身，把 lib/client.js
  * 真正跑起来 —— 走 Loader 契约、apply() 注册槽位、渲染整棵组件树、派发点击、
@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLIENT_PATH = path.join(__dirname, '..', 'lib', 'client.js');
-const PKG_NAME = 'dsh-stock-ticker';
+const PKG_NAME = 'dsh-stock-bar';
 
 let pass = 0;
 let fail = 0;
@@ -810,7 +810,7 @@ check('注册了 1 个槽位条目', registrations.length === 1, registrations.l
 
 const reg = registrations[0];
 check("槽位名 = 'shell.overlay'（frame 级 overlay 座位）", reg && reg.entry.name === 'shell.overlay', reg && reg.entry.name);
-check("条目 id = 'stock-ticker'", reg && reg.entry.id === 'stock-ticker', reg && reg.entry.id);
+check("条目 id = 'stock-bar'", reg && reg.entry.id === 'stock-bar', reg && reg.entry.id);
 check('order 是数字', reg && typeof reg.entry.order === 'number', reg && reg.entry.order);
 check('注册的是函数组件', reg && typeof reg.component === 'function', reg && typeof reg.component);
 const registered = { component: reg.component };
@@ -845,7 +845,7 @@ section('数据到位后渲染');
 // 让 usePortfolio 的 effect 跑完：再 settle 几轮
 await settle(12);
 const text = allText(tree);
-check('state 已拉取（/state 请求发出）', fetchLog.some((u) => u.includes('/api/stock-ticker/state')), fetchLog.slice(0, 3));
+check('state 已拉取（/state 请求发出）', fetchLog.some((u) => u.includes('/api/stock-bar/state')), fetchLog.slice(0, 3));
 check('顶栏显示交易时段标签', /交易中/.test(text), text.slice(0, 200));
 
 const chips = findByClass(tree, 'dst-chip');

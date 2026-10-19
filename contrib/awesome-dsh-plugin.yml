@@ -1,7 +1,7 @@
 # 提交给 awesome-dsh-plugin 的条目
 #
 # 用法：把这个文件的内容存为 awesome-dsh-plugin 仓库里的
-#   data/plugins/NoCandles__dsh-stock-ticker.yml
+#   data/plugins/NoCandles__dsh-stock-bar.yml
 # 然后向 https://github.com/awesome-dsh-plugin/awesome-dsh-plugin 提一个 PR。
 # 规则见 https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/blob/main/contributing.md
 #
@@ -10,8 +10,8 @@
 # - 仓库需要创建满 1 天才会通过 CI 的 repo-age 检查。
 # - url 必须与仓库地址完全一致。
 
-url: https://github.com/NoCandles/dsh-stock-ticker
-name: NoCandles/dsh-stock-ticker
+url: https://github.com/NoCandles/dsh-stock-bar
+name: NoCandles/dsh-stock-bar
 category: ui
 description:
   en: 'Always-on quotes strip pinned to the top of the DSH window: watchlist, holdings with share counts and cost price, P&L, candlestick and intraday charts, 5-level order book, trade ledger, price alerts, and streamed AI review of the selected symbol.'

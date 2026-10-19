@@ -170,27 +170,27 @@ const post = (p, b) => call(p, { method: 'POST', body: b });
 section('路由注册');
 {
   const expected = [
-    '/api/stock-ticker/state', '/api/stock-ticker/kline', '/api/stock-ticker/search',
-    '/api/stock-ticker/health', '/api/stock-ticker/trends', '/api/stock-ticker/orderbook',
-    '/api/stock-ticker/trades', '/api/stock-ticker/items/save', '/api/stock-ticker/items/remove',
-    '/api/stock-ticker/settings/save', '/api/stock-ticker/trades/save', '/api/stock-ticker/trades/remove',
-    '/api/stock-ticker/trades/clear', '/api/stock-ticker/trades/apply',
-    '/api/stock-ticker/alerts/save', '/api/stock-ticker/alerts/remove', '/api/stock-ticker/alerts/ack',
-    '/api/stock-ticker/ai/models', '/api/stock-ticker/ai/analyze',
+    '/api/stock-bar/state', '/api/stock-bar/kline', '/api/stock-bar/search',
+    '/api/stock-bar/health', '/api/stock-bar/trends', '/api/stock-bar/orderbook',
+    '/api/stock-bar/trades', '/api/stock-bar/items/save', '/api/stock-bar/items/remove',
+    '/api/stock-bar/settings/save', '/api/stock-bar/trades/save', '/api/stock-bar/trades/remove',
+    '/api/stock-bar/trades/clear', '/api/stock-bar/trades/apply',
+    '/api/stock-bar/alerts/save', '/api/stock-bar/alerts/remove', '/api/stock-bar/alerts/ack',
+    '/api/stock-bar/ai/models', '/api/stock-bar/ai/analyze',
   ];
   check('全部 19 条路由都在', routes.size === 19, routes.size);
   for (const p of expected) {
-    check(`注册了 ${p.replace('/api/stock-ticker', '')}`, routes.has(p));
+    check(`注册了 ${p.replace('/api/stock-bar', '')}`, routes.has(p));
   }
   check('全部走 ctx.effect 注册（可随插件卸载）', disposers.length === 19, disposers.length);
   let unknown = null;
-  try { unknown = await call('/api/stock-ticker/nope'); } catch (e) { unknown = { status: 0, error: e.message }; }
+  try { unknown = await call('/api/stock-bar/nope'); } catch (e) { unknown = { status: 0, error: e.message }; }
   check('未知路径返回 404', unknown.status === 404, unknown.status);
 }
 
 section('响应头契约（浏览器侧要靠它）');
 {
-  const r = await call('/api/stock-ticker/state');
+  const r = await call('/api/stock-bar/state');
   check('Content-Type 是 utf-8 JSON',
     /application\/json/.test(r.headers.get('content-type') || '') && /charset=utf-8/.test(r.headers.get('content-type') || ''),
     r.headers.get('content-type'));
@@ -207,7 +207,7 @@ section('响应头契约（浏览器侧要靠它）');
 section('GET /state');
 let state = null;
 {
-  const r = await call('/api/stock-ticker/state?fresh=1');
+  const r = await call('/api/stock-bar/state?fresh=1');
   state = r.json;
   check('HTTP 200', r.status === 200, r.status);
   check('ok:true', state && state.ok === true);
@@ -232,7 +232,7 @@ let state = null;
 
 section('GET /health');
 {
-  const r = await call('/api/stock-ticker/health');
+  const r = await call('/api/stock-bar/health');
   const h = r.json;
   check('HTTP 200', r.status === 200);
   check('quoteOk 为真（真实行情可用）', h.quoteOk === true, h.quoteErr);
@@ -243,20 +243,20 @@ section('GET /health');
 
 section('GET /search（中文 / 拼音 / 空）');
 {
-  const a = await call(`/api/stock-ticker/search?q=${encodeURIComponent('贵州茅台')}`);
+  const a = await call(`/api/stock-bar/search?q=${encodeURIComponent('贵州茅台')}`);
   check('中文搜索有结果', (a.json.hits || []).length > 0, a.json.hits && a.json.hits.length);
   check('命中里含 600519', (a.json.hits || []).some((x) => String(x.code) === '600519'), (a.json.hits || []).map((x) => x.code));
 
-  const b = await call('/api/stock-ticker/search?q=gzmt');
+  const b = await call('/api/stock-bar/search?q=gzmt');
   check('拼音搜索有结果', (b.json.hits || []).length > 0, b.json.hits && b.json.hits.length);
 
-  const c = await call('/api/stock-ticker/search?q=');
+  const c = await call('/api/stock-bar/search?q=');
   check('空关键词返回空数组而不是报错', Array.isArray(c.json.hits) && c.json.hits.length === 0, c.json);
 }
 
 section('GET /kline（真实 K 线 + 截断修好了没）');
 {
-  const r = await call('/api/stock-ticker/kline?symbol=sh600519&period=day&adjust=pre&count=30');
+  const r = await call('/api/stock-bar/kline?symbol=sh600519&period=day&adjust=pre&count=30');
   const k = r.json;
   if (upstreamDown(k)) {
     note(`上游 K 线接口当前不可用（${k.error}），本段跳过。`);
@@ -268,14 +268,14 @@ section('GET /kline（真实 K 线 + 截断修好了没）');
     check('日期升序', rows.every((c, i) => i === 0 || rows[i - 1].date <= c.date));
     check('最后一根是最近交易日', rows.length > 0, rows[rows.length - 1]);
 
-    const w = await call('/api/stock-ticker/kline?symbol=sh600519&period=week&count=20');
+    const w = await call('/api/stock-bar/kline?symbol=sh600519&period=week&count=20');
     check('周线 20 根', (w.json.candles || []).length === 20, (w.json.candles || []).length);
   }
 }
 
 section('GET /trends（新增：分时）');
 {
-  const r = await call('/api/stock-ticker/trends?symbol=sh600519&days=1');
+  const r = await call('/api/stock-bar/trends?symbol=sh600519&days=1');
   const t = r.json;
   if (upstreamDown(t)) {
     note(`上游分时接口当前不可用（${t.error}），本段跳过。`);
@@ -288,17 +288,17 @@ section('GET /trends（新增：分时）');
     check('points 价格区间合理（不跟 prevClose 差 10 倍以上）',
       (t.points || []).every((x) => Math.abs(x.price - t.prevClose) < t.prevClose),
       null);
-    const d5 = await call('/api/stock-ticker/trends?symbol=sh600519&days=5');
+    const d5 = await call('/api/stock-bar/trends?symbol=sh600519&days=5');
     check('5 日分时点数多于 1 日', (d5.json.points || []).length > (t.points || []).length,
       { d1: (t.points || []).length, d5: (d5.json.points || []).length });
   }
-  const bad = await call('/api/stock-ticker/trends?symbol=sh000001&days=1');
+  const bad = await call('/api/stock-bar/trends?symbol=sh000001&days=1');
   check('指数也能取分时', bad.json.ok === true || bad.json.ok === false, bad.json.ok);
 }
 
 section('GET /orderbook（新增：五档）');
 {
-  const r = await call('/api/stock-ticker/orderbook?symbol=sh600519');
+  const r = await call('/api/stock-bar/orderbook?symbol=sh600519');
   const b = r.json;
   check('ok:true', b.ok === true, b.error);
   check('买卖各 5 档', (b.bids || []).length === 5 && (b.asks || []).length === 5,
@@ -309,7 +309,7 @@ section('GET /orderbook（新增：五档）');
   check('买1 不高于现价', (b.bids || [])[0] && b.bids[0].price <= b.price, { bid1: b.bids && b.bids[0] && b.bids[0].price, price: b.price });
   check('带委比与买卖量', b.commissionRatio != null && b.bidVolume > 0 && b.askVolume > 0,
     { ratio: b.commissionRatio, bid: b.bidVolume, ask: b.askVolume });
-  const idx = await call('/api/stock-ticker/orderbook?symbol=sh000001');
+  const idx = await call('/api/stock-bar/orderbook?symbol=sh000001');
   check('指数没有盘口时返回结构化错误而不是 500', idx.status === 200 && idx.json.ok === false, idx.json.error);
 }
 
@@ -319,55 +319,55 @@ section('GET /orderbook（新增：五档）');
 
 section('POST /settings/save');
 {
-  const r = await post('/api/stock-ticker/settings/save', { refreshMs: 3000, chart: 'kline', trendDays: 5, showOrderBook: false });
+  const r = await post('/api/stock-bar/settings/save', { refreshMs: 3000, chart: 'kline', trendDays: 5, showOrderBook: false });
   check('ok:true', r.json.ok === true, r.json);
   check('设置已生效', r.json.settings.refreshMs === 3000 && r.json.settings.chart === 'kline'
     && r.json.settings.trendDays === 5 && r.json.settings.showOrderBook === false, r.json.settings);
-  const clamp = await post('/api/stock-ticker/settings/save', { refreshMs: 10, bogusKey: 1 });
+  const clamp = await post('/api/stock-bar/settings/save', { refreshMs: 10, bogusKey: 1 });
   check('refreshMs 被夹到下限 1000', clamp.json.settings.refreshMs === 1000, clamp.json.settings.refreshMs);
   check('未知字段被忽略', !('bogusKey' in clamp.json.settings), Object.keys(clamp.json.settings));
-  await post('/api/stock-ticker/settings/save', { refreshMs: 5000, chart: 'trend', trendDays: 1, showOrderBook: true });
+  await post('/api/stock-bar/settings/save', { refreshMs: 5000, chart: 'trend', trendDays: 1, showOrderBook: true });
 }
 
 section('POST /items/save + /items/remove');
 {
-  const r = await post('/api/stock-ticker/items/save', { input: '000001' });
+  const r = await post('/api/stock-bar/items/save', { input: '000001' });
   check('ok:true', r.json.ok === true, r.json.error);
   check('代码被规范化成 sz000001', r.json.item && r.json.item.symbol === 'sz000001', r.json.item && r.json.item.symbol);
   check('名称从行情回填', !!(r.json.item && r.json.item.name), r.json.item && r.json.item.name);
 
-  const h = await post('/api/stock-ticker/items/save', { symbol: 'sz000001', shares: 2000, cost: 11.2 });
+  const h = await post('/api/stock-bar/items/save', { symbol: 'sz000001', shares: 2000, cost: 11.2 });
   const it = h.json.item;
   check('股数/成本已写入', it.shares === 2000 && it.cost === 11.2, { shares: it.shares, cost: it.cost });
   check('算出市值', Math.abs(it.marketValue - it.price * 2000) < 0.02, { mv: it.marketValue, price: it.price });
   check('算出盈亏', Math.abs(it.pnl - (it.price - 11.2) * 2000) < 0.02, { pnl: it.pnl });
   check('标记为持仓', it.held === true);
 
-  const again = await post('/api/stock-ticker/items/save', { symbol: '000001', shares: 2000, cost: 11.2 });
+  const again = await post('/api/stock-bar/items/save', { symbol: '000001', shares: 2000, cost: 11.2 });
   const list = (again.json.state.items || []).filter((x) => x.symbol === 'sz000001');
   check('重复保存不会新增一条', list.length === 1, list.length);
 
-  const rm = await post('/api/stock-ticker/items/remove', { symbol: 'sz000001' });
+  const rm = await post('/api/stock-bar/items/remove', { symbol: 'sz000001' });
   check('删除成功', rm.json.ok === true && rm.json.removed === true, rm.json);
-  const rm2 = await post('/api/stock-ticker/items/remove', { symbol: 'sz000001' });
+  const rm2 = await post('/api/stock-bar/items/remove', { symbol: 'sz000001' });
   check('重复删除不报错', rm2.json.ok === true && rm2.json.removed === false, rm2.json);
 }
 
 section('POST /trades/save（新增：交易流水）');
 {
-  const r = await post('/api/stock-ticker/trades/save', {
+  const r = await post('/api/stock-bar/trades/save', {
     symbol: '600519', side: 'buy', price: 1500, shares: 100, fee: 5, date: '2026-01-06',
   });
   check('ok:true', r.json.ok === true, r.json.error);
   check('返回 trade 且带 id', !!(r.json.trade && r.json.trade.id), r.json.trade);
   check('名称被回填', r.json.trade.name === '贵州茅台', r.json.trade.name);
 
-  const s = await post('/api/stock-ticker/trades/save', {
+  const s = await post('/api/stock-bar/trades/save', {
     symbol: '600519', side: 'sell', price: 1700, shares: 40, fee: 6, date: '2026-03-02',
   });
   check('第二笔（卖出）成功', s.json.ok === true, s.json.error);
 
-  const list = await call('/api/stock-ticker/trades');
+  const list = await call('/api/stock-bar/trades');
   check('GET /trades ok', list.json.ok === true, list.json.error);
   check('列出 2 笔', (list.json.trades || []).length === 2, (list.json.trades || []).length);
   // 100 股 @1500 费 5 -> 均价 1500.05；卖 40 股 @1700 费 6
@@ -379,20 +379,20 @@ section('POST /trades/save（新增：交易流水）');
   check('剩余 60 股、均价 1500.05', b && b.qty === 60 && Math.abs(b.avgCost - 1500.05) < 0.001, b);
   check('带最新价方便对照', !!(list.json.quotes && list.json.quotes.sh600519), list.json.quotes && Object.keys(list.json.quotes));
 
-  const bad = await post('/api/stock-ticker/trades/save', { symbol: '600519', side: 'buy', price: 0, shares: 10 });
+  const bad = await post('/api/stock-bar/trades/save', { symbol: '600519', side: 'buy', price: 0, shares: 10 });
   check('价格为 0 被拒', bad.json.ok === false, bad.json.error);
-  const bad2 = await post('/api/stock-ticker/trades/save', { symbol: '不存在的东西', side: 'buy', price: 10, shares: 10 });
+  const bad2 = await post('/api/stock-bar/trades/save', { symbol: '不存在的东西', side: 'buy', price: 10, shares: 10 });
   check('不存在的标的被拒', bad2.json.ok === false, bad2.json.error);
-  const bad3 = await post('/api/stock-ticker/trades/save', { symbol: '600519', side: 'hold', price: 10, shares: 10 });
+  const bad3 = await post('/api/stock-bar/trades/save', { symbol: '600519', side: 'hold', price: 10, shares: 10 });
   check('非法方向被拒', bad3.json.ok === false, bad3.json.error);
 
-  const over = await post('/api/stock-ticker/trades/save', { symbol: '600519', side: 'sell', price: 1700, shares: 999 });
+  const over = await post('/api/stock-bar/trades/save', { symbol: '600519', side: 'sell', price: 1700, shares: 999 });
   check('超卖被拦（提示漏记买入）', over.json.ok === false && /超过/.test(over.json.error || ''), over.json.error);
 }
 
 section('POST /trades/apply（按流水反推持仓）');
 {
-  const r = await post('/api/stock-ticker/trades/apply', {});
+  const r = await post('/api/stock-bar/trades/apply', {});
   check('ok:true', r.json.ok === true, r.json.error);
   check('改动了持仓', typeof r.json.changed === 'number' && r.json.changed >= 1, r.json.changed);
   const item = (r.json.state.items || []).find((x) => x.symbol === 'sh600519');
@@ -403,23 +403,23 @@ section('POST /trades/apply（按流水反推持仓）');
 
 section('POST /trades/remove + /trades/clear');
 {
-  const list = await call('/api/stock-ticker/trades');
+  const list = await call('/api/stock-bar/trades');
   const target = list.json.trades[0];
-  const r = await post('/api/stock-ticker/trades/remove', { id: target.id });
+  const r = await post('/api/stock-bar/trades/remove', { id: target.id });
   check('ok:true', r.json.ok === true, r.json.error);
   check('确实删掉了', r.json.removed === true, r.json.removed);
-  const again = await post('/api/stock-ticker/trades/remove', { id: target.id });
+  const again = await post('/api/stock-bar/trades/remove', { id: target.id });
   check('重复删除不报错', again.json.ok === true && again.json.removed === false, again.json);
 
-  const c = await post('/api/stock-ticker/trades/clear', {});
+  const c = await post('/api/stock-bar/trades/clear', {});
   check('清空成功', c.json.ok === true, c.json.error);
-  const after = await call('/api/stock-ticker/trades');
+  const after = await call('/api/stock-bar/trades');
   check('清空后没有流水', (after.json.trades || []).length === 0, (after.json.trades || []).length);
 }
 
 section('POST /alerts/save + /remove + /ack（新增：价格预警）');
 {
-  const r = await post('/api/stock-ticker/alerts/save', {
+  const r = await post('/api/stock-bar/alerts/save', {
     symbol: 'sh600519', kind: 'price', op: '>=', value: 1,
   });
   check('ok:true', r.json.ok === true, r.json.error);
@@ -431,49 +431,49 @@ section('POST /alerts/save + /remove + /ack（新增：价格预警）');
 
   // 顶栏弹窗由轮询 /state 消费 fired 队列驱动，所以这里验证"下一次轮询会送出来"，
   // 而不是要求 save 的响应体里带 fired（队列的所有权归轮询接口）
-  const poll = await call('/api/stock-ticker/state');
+  const poll = await call('/api/stock-bar/state');
   check('命中项由轮询 /state 送进 fired（顶栏据此弹提示）',
     Array.isArray(poll.json.fired) && poll.json.fired.some((a) => a.id === alert.id),
     poll.json.fired && poll.json.fired.map((a) => a.id));
-  const poll2 = await call('/api/stock-ticker/state');
+  const poll2 = await call('/api/stock-bar/state');
   check('fired 取走即清空（同一个条件不会反复弹）',
     !(poll2.json.fired || []).some((a) => a.id === alert.id),
     poll2.json.fired && poll2.json.fired.map((a) => a.id));
 
-  const ack = await post('/api/stock-ticker/alerts/ack', { id: alert.id });
+  const ack = await post('/api/stock-bar/alerts/ack', { id: alert.id });
   check('ack ok', ack.json.ok === true, ack.json);
-  const st = await call('/api/stock-ticker/state');
+  const st = await call('/api/stock-bar/state');
   const found = (st.json.alerts || []).find((a) => a.id === alert.id);
   check('ack 后重新武装（条件仍成立会立刻再触发，说明标志清过）', !!(found && found.hit), found && { hit: found.hit, firedAt: found.firedAt });
-  const st2 = await call('/api/stock-ticker/state');
+  const st2 = await call('/api/stock-bar/state');
   const found2 = (st2.json.alerts || []).find((a) => a.id === alert.id);
   check('同一次触发不会重复进 fired', (st2.json.fired || []).filter((a) => a.id === alert.id).length <= 1,
     st2.json.fired && st2.json.fired.map((a) => a.id));
 
-  const no = await post('/api/stock-ticker/alerts/save', { symbol: 'sh600519', kind: 'price', op: '>=', value: 999999 });
+  const no = await post('/api/stock-bar/alerts/save', { symbol: 'sh600519', kind: 'price', op: '>=', value: 999999 });
   check('不可达阈值 hit=false', no.json.alert.hit === false, no.json.alert.hit);
 
-  const off = await post('/api/stock-ticker/alerts/save', { id: no.json.alert.id, enabled: false });
+  const off = await post('/api/stock-bar/alerts/save', { id: no.json.alert.id, enabled: false });
   check('可以停用', off.json.alert.enabled === false, off.json.alert.enabled);
 
-  const pct = await post('/api/stock-ticker/alerts/save', { symbol: 'sh600519', kind: 'pct', op: '<=', value: -50 });
+  const pct = await post('/api/stock-bar/alerts/save', { symbol: 'sh600519', kind: 'pct', op: '<=', value: -50 });
   check('涨跌幅型预警可创建', pct.json.ok === true && pct.json.alert.kind === 'pct', pct.json.error);
 
-  const idx = await post('/api/stock-ticker/alerts/save', { symbol: 'sh000001', kind: 'price', op: '>=', value: 1 });
+  const idx = await post('/api/stock-bar/alerts/save', { symbol: 'sh000001', kind: 'price', op: '>=', value: 1 });
   check('指数也能建预警', idx.json.ok === true, idx.json.error);
 
-  const rm = await post('/api/stock-ticker/alerts/remove', { id: alert.id });
+  const rm = await post('/api/stock-bar/alerts/remove', { id: alert.id });
   check('删除成功', rm.json.ok === true && rm.json.removed === true, rm.json);
-  const rm2 = await post('/api/stock-ticker/alerts/remove', { id: alert.id });
+  const rm2 = await post('/api/stock-bar/alerts/remove', { id: alert.id });
   check('重复删除不报错', rm2.json.ok === true && rm2.json.removed === false, rm2.json);
 
-  const badAck = await post('/api/stock-ticker/alerts/ack', { id: 'nope' });
+  const badAck = await post('/api/stock-bar/alerts/ack', { id: 'nope' });
   check('ack 不存在的 id 返回 ok:false', badAck.json.ok === false, badAck.json);
 }
 
 section('GET /ai/models（新增：模型目录）');
 {
-  const r = await call('/api/stock-ticker/ai/models');
+  const r = await call('/api/stock-bar/ai/models');
   check('HTTP 200', r.status === 200, r.status);
   check('ok:true', r.json && r.json.ok === true, r.json && r.json.ok);
   check('列出提供方', Array.isArray(r.json.providers) && r.json.providers.length === 1, JSON.stringify(r.json.providers));
@@ -485,7 +485,7 @@ section('GET /ai/models（新增：模型目录）');
 section('POST /ai/analyze（新增：NDJSON 流式分析）');
 {
   // 先确认默认模型会被补进请求（客户端没传 model 时宿主自己填）
-  const r = await fetch(`${BASE}/api/stock-ticker/ai/analyze`, {
+  const r = await fetch(`${BASE}/api/stock-bar/ai/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol: '600519', provider: 'deep', model: 'deepseek-v4-flash', style: 'short' }),
@@ -529,7 +529,7 @@ section('POST /ai/analyze（新增：NDJSON 流式分析）');
   check('system 里声明了不构成投资建议', /不构成投资建议/.test(sysMsg), sysMsg.slice(-40));
 
   // 缺 symbol：不进流，直接 JSON 400/200 + ok:false
-  const bad = await post('/api/stock-ticker/ai/analyze', { provider: 'deep', model: 'x' });
+  const bad = await post('/api/stock-bar/ai/analyze', { provider: 'deep', model: 'x' });
   check('缺标的时不进流', bad.json && bad.json.ok === false, bad.json);
   check('缺标的时给出可读原因', /标的|symbol|代码/.test(String(bad.json && bad.json.error)), bad.json && bad.json.error);
 }
@@ -537,16 +537,16 @@ section('POST /ai/analyze（新增：NDJSON 流式分析）');
 section('错误路径：一律 200 + ok:false，不 4xx/5xx');
 {
   const cases = [
-    ['GET 写接口', await call('/api/stock-ticker/items/save')],
-    ['POST 缺 body', await post('/api/stock-ticker/items/save', {})],
-    ['POST 乱码标的', await post('/api/stock-ticker/items/save', { input: '???乱码???' })],
-    ['kline 缺 symbol', await call('/api/stock-ticker/kline')],
-    ['kline 乱码 symbol', await call('/api/stock-ticker/kline?symbol=zzzzzz')],
-    ['trends 缺 symbol', await call('/api/stock-ticker/trends')],
-    ['orderbook 缺 symbol', await call('/api/stock-ticker/orderbook')],
-    ['trades/apply 无需参数', await post('/api/stock-ticker/trades/apply', {})],
-    ['alerts/save 缺标的', await post('/api/stock-ticker/alerts/save', {})],
-    ['alerts/remove 缺 id', await post('/api/stock-ticker/alerts/remove', {})],
+    ['GET 写接口', await call('/api/stock-bar/items/save')],
+    ['POST 缺 body', await post('/api/stock-bar/items/save', {})],
+    ['POST 乱码标的', await post('/api/stock-bar/items/save', { input: '???乱码???' })],
+    ['kline 缺 symbol', await call('/api/stock-bar/kline')],
+    ['kline 乱码 symbol', await call('/api/stock-bar/kline?symbol=zzzzzz')],
+    ['trends 缺 symbol', await call('/api/stock-bar/trends')],
+    ['orderbook 缺 symbol', await call('/api/stock-bar/orderbook')],
+    ['trades/apply 无需参数', await post('/api/stock-bar/trades/apply', {})],
+    ['alerts/save 缺标的', await post('/api/stock-bar/alerts/save', {})],
+    ['alerts/remove 缺 id', await post('/api/stock-bar/alerts/remove', {})],
   ];
   for (const [label, r] of cases) {
     check(`${label} -> 200 + 结构化`, r.status === 200 && r.json && typeof r.json.ok === 'boolean', { status: r.status, json: r.json });
@@ -574,7 +574,7 @@ section('卸载');
 {
   for (const { d } of disposers) { try { if (typeof d === 'function') d(); } catch { /* 忽略 */ } }
   check('卸载后路由表清空', routes.size === 0, routes.size);
-  const gone = await call('/api/stock-ticker/state');
+  const gone = await call('/api/stock-bar/state');
   check('卸载后请求变 404', gone.status === 404, gone.status);
 }
 

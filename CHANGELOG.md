@@ -39,7 +39,7 @@
   `window.__ModuleLoader__` artifact）。
 - 19 条 HTTP 接口全部走 DSH 自带 HTTP 服务，任何失败都是 HTTP 200 + `{ ok:false, error }`。
 - 行情缓存是 LRU（上限 200）；轮询跟交易时段走（午休 ≥30s、收盘后 ≥60s），页面不可见时不轮询。
-- 设置与持仓存 `~/.dsh/dsh-stock-ticker/portfolio.json`，原子写入，损坏文件改名保留而不是静默丢弃，
+- 设置与持仓存 `~/.dsh/dsh-stock-bar/portfolio.json`，原子写入，损坏文件改名保留而不是静默丢弃，
   旧版本数据文件升级自动补默认值（不丢持仓）。
 - 四个自检脚本共 **745 条断言**：`verify.mjs`（宿主 249）、`verify-client.mjs`（界面 240）、
   `verify-live.mjs`（真 HTTP 端到端 173）、`verify-analysis.mjs`（AI 数据包 83）。

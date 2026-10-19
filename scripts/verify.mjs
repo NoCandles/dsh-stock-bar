@@ -1,5 +1,5 @@
 /**
- * dsh-stock-ticker / scripts/verify.mjs
+ * dsh-stock-bar / scripts/verify.mjs
  *
  * Host 半边集成自检：用一个假的 Cordis ctx 真跑 apply()，把注册出来的每条路由
  * 用假的 req/res 走一遍，断言返回的 JSON。不依赖 DSH 运行时，不需要装插件。
@@ -181,7 +181,7 @@ async function call(ctx, pathWithQuery, { method = 'GET', body } = {}) {
 
 /* ---------------- 开始 ---------------- */
 
-const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-stock-ticker-verify-'));
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-stock-bar-verify-'));
 const storePath = path.join(tmpDir, 'portfolio.json');
 const symbol = 'sh600519';
 
@@ -618,7 +618,7 @@ section('老版本数据文件迁移（升级不能丢持仓）');
       { symbol: 'sh600519', code: '600519', name: '贵州茅台', shares: 100, cost: 1622, watch: true, index: false },
     ],
   };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-stock-ticker-legacy-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-stock-bar-legacy-'));
   const file = path.join(dir, 'portfolio.json');
   fs.writeFileSync(file, JSON.stringify(legacy, null, 2));
 

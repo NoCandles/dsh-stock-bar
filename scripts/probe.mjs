@@ -1,5 +1,5 @@
 /**
- * dsh-stock-ticker / scripts/probe.mjs
+ * dsh-stock-bar / scripts/probe.mjs
  * 快速连通性探针：验证数据源在本机可用、字段解析正确。
  * 运行：node scripts/probe.mjs
  */

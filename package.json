@@ -1,5 +1,5 @@
 {
-  "name": "dsh-stock-ticker",
+  "name": "dsh-stock-bar",
   "version": "1.0.0",
   "type": "module",
   "description": "顶部状态栏实时股票行情条：自选股、持仓成本、盈亏、K线图 · Always-on stock quotes strip at the top of the DSH window.",
@@ -25,11 +25,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/NoCandles/dsh-stock-ticker.git"
+    "url": "git+https://github.com/NoCandles/dsh-stock-bar.git"
   },
-  "homepage": "https://github.com/NoCandles/dsh-stock-ticker#readme",
+  "homepage": "https://github.com/NoCandles/dsh-stock-bar#readme",
   "bugs": {
-    "url": "https://github.com/NoCandles/dsh-stock-ticker/issues"
+    "url": "https://github.com/NoCandles/dsh-stock-bar/issues"
   },
   "main": "./lib/index.js",
   "icon": "./icon.svg",

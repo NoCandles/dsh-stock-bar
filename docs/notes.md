@@ -1,4 +1,4 @@
-# dsh-stock-ticker 实现笔记
+# dsh-stock-bar 实现笔记
 
 接口细节、自检脚本、实现要点与已知限制。功能与安装见 [README](../README.md)。
 
@@ -8,25 +8,25 @@
 写类接口一律 `POST`；**任何失败都是 HTTP 200 + `{ ok: false, error }`**，不会给 4xx/5xx（响应头带 `Cache-Control: no-store`）。
 
 ```
-GET  /api/stock-ticker/state            行情 + 自选/持仓 + 汇总 + 设置 + 时段 + 触发的预警
-GET  /api/stock-ticker/kline            K 线（symbol / period / adjust / count）
-GET  /api/stock-ticker/trends           分时（symbol / days = 1|3|5）
-GET  /api/stock-ticker/orderbook        五档盘口 + 委比
-GET  /api/stock-ticker/search           按代码/名称/拼音搜标的
-GET  /api/stock-ticker/trades           交易流水 + 已实现盈亏
-GET  /api/stock-ticker/health           自检：node 版本、store 路径、行情/K线/盘口是否可用、缓存规模
-POST /api/stock-ticker/items/save       加自选或改持仓（symbol 可写 600519 / sh600519 / 拼音）
-POST /api/stock-ticker/items/remove     删自选
-POST /api/stock-ticker/settings/save    改设置（只认已知键，数值会夹到合法区间）
-POST /api/stock-ticker/trades/save      记一笔流水（side=buy|sell、price、shares、fee、date）
-POST /api/stock-ticker/trades/remove    删一笔流水
-POST /api/stock-ticker/trades/clear     清空某只（或全部）流水
-POST /api/stock-ticker/trades/apply     按流水反推持仓（覆盖股数与成本价）
-POST /api/stock-ticker/alerts/save      加/改预警，响应直接带 hit 与 current
-POST /api/stock-ticker/alerts/remove    删预警
-POST /api/stock-ticker/alerts/ack       确认触发（重新武装）
-GET  /api/stock-ticker/ai/models        dsh-llm 里的供应商与模型目录 + 当前选择
-POST /api/stock-ticker/ai/analyze       AI 分析：取数→组装数据包→调模型，NDJSON 流式回传
+GET  /api/stock-bar/state            行情 + 自选/持仓 + 汇总 + 设置 + 时段 + 触发的预警
+GET  /api/stock-bar/kline            K 线（symbol / period / adjust / count）
+GET  /api/stock-bar/trends           分时（symbol / days = 1|3|5）
+GET  /api/stock-bar/orderbook        五档盘口 + 委比
+GET  /api/stock-bar/search           按代码/名称/拼音搜标的
+GET  /api/stock-bar/trades           交易流水 + 已实现盈亏
+GET  /api/stock-bar/health           自检：node 版本、store 路径、行情/K线/盘口是否可用、缓存规模
+POST /api/stock-bar/items/save       加自选或改持仓（symbol 可写 600519 / sh600519 / 拼音）
+POST /api/stock-bar/items/remove     删自选
+POST /api/stock-bar/settings/save    改设置（只认已知键，数值会夹到合法区间）
+POST /api/stock-bar/trades/save      记一笔流水（side=buy|sell、price、shares、fee、date）
+POST /api/stock-bar/trades/remove    删一笔流水
+POST /api/stock-bar/trades/clear     清空某只（或全部）流水
+POST /api/stock-bar/trades/apply     按流水反推持仓（覆盖股数与成本价）
+POST /api/stock-bar/alerts/save      加/改预警，响应直接带 hit 与 current
+POST /api/stock-bar/alerts/remove    删预警
+POST /api/stock-bar/alerts/ack       确认触发（重新武装）
+GET  /api/stock-bar/ai/models        dsh-llm 里的供应商与模型目录 + 当前选择
+POST /api/stock-bar/ai/analyze       AI 分析：取数→组装数据包→调模型，NDJSON 流式回传
 ```
 
 `/ai/analyze` 的响应是 `Content-Type: application/x-ndjson`，一行一个事件：
@@ -38,7 +38,7 @@ POST /api/stock-ticker/ai/analyze       AI 分析：取数→组装数据包→�
 `lib/providers.js`，`scripts/probe.mjs` 可以直接打真实接口跑连通性。
 
 **持仓/流水/预警/设置都存在宿主侧的数据文件里**，不写浏览器 localStorage ——
-换窗口、清缓存、换浏览器都不会丢。默认路径 `<DSH_HOME>\dsh-stock-ticker\portfolio.json`
+换窗口、清缓存、换浏览器都不会丢。默认路径 `<DSH_HOME>\dsh-stock-bar\portfolio.json`
 （可用 `cordis.patch.yml` 的 `config.storePath` 改）。写入是「先写 `.tmp-<pid>` 再 rename」的原子替换；
 文件损坏时会重命名成 `portfolio.json.broken-<时间戳>` 留着，而不是静默丢掉你的持仓。
 
@@ -67,7 +67,7 @@ node scripts/verify-analysis.mjs   # 83 条
 node scripts/probe.mjs
 
 # 在线装配自检：直接问正在运行的 DSH 要本插件的客户端 bundle
-node scripts/probe-client-served.mjs "<profile>\node_modules\dsh-stock-ticker\lib\client.js"
+node scripts/probe-client-served.mjs "<profile>\node_modules\dsh-stock-bar\lib\client.js"
 
 # 人工看一眼「喂给 AI 的数据包」长什么样（真实行情，不打模型）
 node scripts/peek-pack.mjs sh600519 short
@@ -96,7 +96,7 @@ node scripts/peek-pack.mjs sh600519 short
   不会让 DSH 的 HTTP 服务给用户抛 500。缓存 TTL：行情 2s / K线 15s / 分时 20s / 盘口 3s。
 - **客户端半边**（`lib/client.js`）：`window.__ModuleLoader__.load({ id, factory })`，`id` 必须等于包名，
   只 `require('react')`（浏览器模块表里只有 react 等 9 个模块，DSH 文档明确禁止 require 它自己的内部包）。
-  唯一的对外请求是 `fetch('/api/stock-ticker/...')`。
+  唯一的对外请求是 `fetch('/api/stock-bar/...')`。
 - **位置**：`shell.overlay` 是 `position:absolute; inset:0; pointer-events:none` 的图层，
   且只有直接子元素才恢复 `pointer-events:auto`。所以条子自己 `position:fixed`，
   顶部偏移取 `--dsh-frame-top-clearance`（Windows 上就是标题栏那 40px）+ 用户可调的 `topOffset`。
@@ -158,5 +158,5 @@ node scripts/peek-pack.mjs sh600519 short
 `cordis.patch.yml`，并带 [`dsh-plugin`](https://github.com/topics/dsh-plugin) 话题。
 
 待提交的条目已经写好：[`contrib/awesome-dsh-plugin.yml`](contrib/awesome-dsh-plugin.yml)，
-对应目标是 `data/plugins/NoCandles__dsh-stock-ticker.yml`（该列表一个插件一个 YAML 文件，README 由脚本生成）。
+对应目标是 `data/plugins/NoCandles__dsh-stock-bar.yml`（该列表一个插件一个 YAML 文件，README 由脚本生成）。
 

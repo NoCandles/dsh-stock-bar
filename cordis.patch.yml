@@ -1,6 +1,6 @@
 - insert:
-    - id: stock-ticker
-      name: 'dsh-stock-ticker'
+    - id: stock-bar
+      name: 'dsh-stock-bar'
       config:
         refreshMs: 5000
         storePath: ''

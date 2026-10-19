@@ -6,7 +6,7 @@
  *   段 = [String(mtimeMs), String(ctimeMs), String(size)]   (lib/index.js:187-197, 795-803)
  * 路由只认精确 URL：/plugins/??<id>/client.js&rev=<rev>      (lib/index.js:200-218, 958-972)
  * 所以只要我能自己算出 rev 并拿到 200 + 我们自己的 bundle 内容，
- * 就说明注册表里确实有 dsh-stock-ticker 这一行。
+ * 就说明注册表里确实有 dsh-stock-bar 这一行。
  */
 import { createHash } from 'node:crypto';
 import { statSync } from 'node:fs';
@@ -14,7 +14,7 @@ import { pathToFileURL } from 'node:url';
 
 const CLIENT_PATH = process.argv[2];
 const BASE = process.argv[3] || 'http://127.0.0.1:19387';
-const ID = 'dsh-stock-ticker';
+const ID = 'dsh-stock-bar';
 
 function framedHash(domain, parts, len) {
   const h = createHash('sha1').update(domain).update('\0');

@@ -1,9 +1,9 @@
-# dsh-stock-ticker
+# dsh-stock-bar
 
 **中文** · [English](README.en.md)
 
-[![release](https://img.shields.io/github/v/release/NoCandles/dsh-stock-ticker?color=2fd08a)](https://github.com/NoCandles/dsh-stock-ticker/releases)
-[![license](https://img.shields.io/github/license/NoCandles/dsh-stock-ticker?color=6b5ce7)](LICENSE)
+[![release](https://img.shields.io/github/v/release/NoCandles/dsh-stock-bar?color=2fd08a)](https://github.com/NoCandles/dsh-stock-bar/releases)
+[![license](https://img.shields.io/github/license/NoCandles/dsh-stock-bar?color=6b5ce7)](LICENSE)
 
 钉在 DSH 窗口顶部的股票行情条：看行情、记持仓、画 K 线、让 AI 复盘。
 
@@ -19,20 +19,20 @@
 
 ## 安装
 
-**在 DSH 插件市场里搜 `dsh-stock-ticker` 直接装**（收录后可用）。
+**在 DSH 插件市场里搜 `dsh-stock-bar` 直接装**（收录后可用）。
 
 或者从本仓库装：
 
 ```bash
-dsh plugin --profile desktop add github:NoCandles/dsh-stock-ticker
+dsh plugin --profile desktop add github:NoCandles/dsh-stock-bar
 ```
 
-再把 `dsh-stock-ticker` 加进 `<profile>/package.json` 的 `dsh.profile.bundles`（`dsh plugin` 只把参数转发给 pnpm，不会改这个字段，没列进去的 bundle 不会被加载），然后**完全退出 DSH 再打开** —— 只刷新页面不够。
+再把 `dsh-stock-bar` 加进 `<profile>/package.json` 的 `dsh.profile.bundles`（`dsh plugin` 只把参数转发给 pnpm，不会改这个字段，没列进去的 bundle 不会被加载），然后**完全退出 DSH 再打开** —— 只刷新页面不够。
 
 卸载：
 
 ```bash
-dsh plugin --profile desktop remove dsh-stock-ticker
+dsh plugin --profile desktop remove dsh-stock-bar
 ```
 
 ## 使用
