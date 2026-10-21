@@ -44,14 +44,14 @@ POST /api/stock-bar/ai/analyze       AI 分析：取数→组装数据包→调�
 
 ## 开发与自检
 
-四个脚本，共 **745 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **780 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
 # 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、错误兜底（假 ctx，进程内）
 node scripts/verify.mjs            # 249 条
 
 # 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 240 条
+node scripts/verify-client.mjs     # 275 条（含侧边栏接线与渲染）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
 node scripts/verify-live.mjs       # 173 条
@@ -97,6 +97,16 @@ node scripts/peek-pack.mjs sh600519 short
 - **客户端半边**（`lib/client.js`）：`window.__ModuleLoader__.load({ id, factory })`，`id` 必须等于包名，
   只 `require('react')`（浏览器模块表里只有 react 等 9 个模块，DSH 文档明确禁止 require 它自己的内部包）。
   唯一的对外请求是 `fetch('/api/stock-bar/...')`。
+- **侧边栏页（可选，接 dsh-better-sidebar）**：客户端模块的静态 `inject` 仍然只有 `slots`；better-sidebar
+  通过 `ctx.inject(['betterSidebar'], owner => ...)` 等它出现——没装这个插件时回调不执行，顶栏不受影响，
+  写进静态 `inject` 反而会让没装的机器整个插件挂起。注册的 tab 用 `id: 'dsh-stock-bar:portfolio'`
+  （必须带插件前缀，否则和内置 editor/git/subagent/... 撞名）、`single: true`、`order: 60`；注册包在
+  `ctx.effect` 里，禁用/热更新/卸载时自动注销并释放座位。tab 组件就是同一个 `StockTicker`，只是传
+  `variant: 'sidebar'`：顶栏是 fixed + `shell.overlay`，侧边栏用 `.dst-side` 的 `height:100%` flex 列
+  （宿主 paneBody 是块级滚动容器，根元素得自己撑满、`min-height:0` 才能内部滚动）；面板正文抽成
+  `buildPanelBody()` 两处共用。better-sidebar 传的 `visible: false` 会让 `useTicker(active)` 暂停轮询。
+  主题变量 `--dst-*` 都定义在 `.dst-theme` 上，`.dst-root` / `.dst-side` 各挂一次，暗色跟随
+  `body[data-ds-dark-theme]`。
 - **位置**：`shell.overlay` 是 `position:absolute; inset:0; pointer-events:none` 的图层，
   且只有直接子元素才恢复 `pointer-events:auto`。所以条子自己 `position:fixed`，
   顶部偏移取 `--dsh-frame-top-clearance`（Windows 上就是标题栏那 40px）+ 用户可调的 `topOffset`。
