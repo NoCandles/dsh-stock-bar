@@ -1,5 +1,17 @@
 # 更新日志
 
+## 1.1.0 — 2026-10-21
+
+### 侧边栏接入（可选，需要 dsh-better-sidebar）
+- 装了 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 时，把「股票」注册成右侧栏
+  标签页（`dsh-stock-bar:portfolio`，单实例）：持仓/自选、分时与 K 线、五档盘口、流水、预警、AI 分析
+  全部复用顶栏那套组件，数据与设置跟顶栏共享。
+- `dsh-better-sidebar` 是**软依赖**：通过 `ctx.inject(['betterSidebar'])` 等它出现，没装时这段注册
+  根本不执行，插件行为与之前完全一致，也不会因为缺服务而挂起；`inject` 仍只有 `slots`。
+- 生命周期跟着插件走：注册包在 `ctx.effect` 里，禁用/热更新/卸载时会自动注销 tab、释放座位。
+- 侧边栏标签页不可见时暂停行情轮询（复用 `visible` 参数），不白耗请求。
+- 客户端自检新增 35 条侧边栏断言（240 → 275），四个脚本合计 **780 条**。
+
 ## 1.0.0 — 2026-10-18
 
 首个公开版本。

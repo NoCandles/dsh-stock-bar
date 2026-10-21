@@ -16,10 +16,11 @@
 - **记账**：交易流水、加权平均成本、已实现盈亏
 - **预警**：价格或涨跌幅到线弹提示
 - **AI 分析**：用 DSH 已配置的模型（供应商 → 模型两级选择），流式输出复盘
+- **侧边栏页（可选）**：装了 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 时，同一套面板还能作为右侧栏标签页「股票」打开，与顶栏行情条共用持仓和设置；标签页不可见时自动暂停轮询
 
 ## 安装
 
-**在 DSH 插件市场里搜 `dsh-stock-bar` 直接装**（收录后可用）。
+**在 DSH 插件市场里搜 `dsh-stock-bar` 直接装**。
 
 或者从本仓库装：
 
@@ -39,16 +40,18 @@ dsh plugin --profile desktop remove dsh-stock-bar
 
 点顶栏任意一只股票展开面板，七个标签页：持仓 / 自选 / 添加 / AI 分析 / 流水 / 预警 / 设置。持仓的股数和成本价直接在表格里改。
 
+装了 `dsh-better-sidebar` 扩展时，右侧栏会多一个「股票」标签页（组件与顶栏共用，标签页不可见时自动暂停轮询）。
+
 ## 自检
 
 ```bash
 node scripts/verify.mjs           # 宿主 249 条
-node scripts/verify-client.mjs    # 客户端渲染 240 条
+node scripts/verify-client.mjs    # 客户端渲染 275 条
 node scripts/verify-live.mjs      # 真 HTTP 端到端 173 条
 node scripts/verify-analysis.mjs  # AI 数据包 83 条
 ```
 
-合计 745 条断言，不需要 DSH，也不需要任何密钥。
+合计 780 条断言，不需要 DSH，也不需要任何密钥。
 
 ## 说明
 

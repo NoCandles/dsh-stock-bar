@@ -16,10 +16,11 @@ A stock ticker strip pinned to the top of the DSH window: quotes, holdings, char
 - **Ledger** — trade history, weighted-average cost, realized P&L
 - **Alerts** — price or percentage thresholds with a toast
 - **AI review** — uses the models already configured in DSH (provider → model picker), streamed output
+- **Sidebar page (optional)** — with [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) installed, the same panel also opens as a "股票" tab in the right sidebar, sharing holdings and settings with the top strip; polling pauses while the tab is hidden
 
 ## Install
 
-**Search `dsh-stock-bar` in the DSH plugin market** (once listed).
+**Search `dsh-stock-bar` in the DSH plugin market**.
 
 Or install from this repo:
 
@@ -39,16 +40,18 @@ dsh plugin --profile desktop remove dsh-stock-bar
 
 Click any symbol in the top strip to open the panel: Holdings / Watchlist / Add / AI review / Trades / Alerts / Settings. Share counts and cost prices are edited inline in the table.
 
+With `dsh-better-sidebar` installed, a "股票" tab also appears in the right sidebar (same components as the top strip; polling pauses while the tab is hidden).
+
 ## Self-checks
 
 ```bash
 node scripts/verify.mjs           # host, 249 assertions
-node scripts/verify-client.mjs    # client rendering, 240 assertions
+node scripts/verify-client.mjs    # client rendering, 275 assertions
 node scripts/verify-live.mjs      # real HTTP end-to-end, 173 assertions
 node scripts/verify-analysis.mjs  # AI data pack, 83 assertions
 ```
 
-745 assertions in total; none of them need DSH or any API key.
+780 assertions in total; none of them need DSH or any API key.
 
 ## Notes
 
