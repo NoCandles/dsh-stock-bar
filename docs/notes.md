@@ -51,14 +51,14 @@ POST /api/stock-bar/ai/history/clear  清空历史
 
 ## 开发与自检
 
-四个脚本，共 **850 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **860 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
 # 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、错误兜底（假 ctx，进程内）
 node scripts/verify.mjs            # 279 条
 
 # 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 299 条（含侧边栏接线与渲染、AI 历史与周期选择）
+node scripts/verify-client.mjs     # 309 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
 node scripts/verify-live.mjs       # 177 条
@@ -143,6 +143,8 @@ node scripts/peek-pack.mjs sh600519 short
   - 每次分析成功写进 `portfolio.json` 的 `analyses`（最多 50 条，`normalizeData` 容错加载）；
     列表接口只回摘要和 140 字片段，点开才取全文，`done.recordId` 就是新记录的 id。
     分析状态在客户端提升成模块级单例，切标签页/侧边栏来回不会中断流式输出，也不会丢正文。
+    切换自选（`target` 变化）时，如果面板里还是别的标的就自动 `reset()`，避免张冠李戴；
+    正文可在 meta 行点「收起/展开」折叠，状态存在 `settings.aiCollapsed`，收起时只留一行摘要。
   - `style: short` 限字数、`style: detail` 放开；`extra` 会把用户的额外要求拼进去。
   - 流式事件：`meta`（数据包统计 + 已喂数据来源）→ `reasoning`（思考过程，界面折叠显示）→
     `delta`（正文增量）→ `done`（完整正文 + token 用量 + 耗时 + finish）。客户端跨 chunk 拼行，

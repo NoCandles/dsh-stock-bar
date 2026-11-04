@@ -1490,6 +1490,32 @@ section('AI 分析');
   check('切回来正文还在', /量能温和，盘口买盘 814 手。/.test(allText(tree)), null);
   check('切回来按钮仍是「重新分析」', /重新分析/.test(allText(tree)), null);
 
+  // —— 正文收起 / 展开 ——
+  const foldPill = (label) => collect(tree).find((n) => n.tag === 'span'
+    && String(n.props.className || '').split(/\s+/).includes('dst-pill')
+    && String(allText(n)).trim() === label);
+  check('正文旁有「收起」按钮', !!foldPill('收起'), null);
+  foldPill('收起').props.onClick({});
+  await settle(10);
+  check('收起后正文折叠', findByClass(tree, 'dst-ai-bodyfold').length === 1,
+    findByClass(tree, 'dst-ai-bodyfold').length);
+  check('收起后给一行摘要', /正文已收起/.test(allText(tree)), null);
+  check('按钮变成「展开」', !!foldPill('展开'), null);
+  foldPill('展开').props.onClick({});
+  await settle(10);
+  check('展开后正文恢复', findByClass(tree, 'dst-ai-bodyfold').length === 0,
+    findByClass(tree, 'dst-ai-bodyfold').length);
+  check('展开状态写回设置', STATE.settings.aiCollapsed === false, STATE.settings.aiCollapsed);
+
+  // —— 切换自选后自动清空上一只的分析 ——
+  const pinganChip = findByClass(tree, 'dst-chip').find((n) => /平安银行/.test(allText(n)));
+  check('顶栏有另一只可切换的标的', !!pinganChip, null);
+  pinganChip.props.onClick({ preventDefault() {}, stopPropagation() {} });
+  await settle(16);
+  check('切换标的后分析面板自动清空', findByClass(tree, 'dst-ai-out').length === 0,
+    findByClass(tree, 'dst-ai-out').length);
+  check('切换标的后回到空态文案', /让模型做一次复盘/.test(allText(tree)), null);
+
   // —— 历史记录：列表 / 回看 / 删除 / 清空 ——
   check('历史区块显示条数', /历史分析（2）/.test(allText(tree)), null);
   check('历史条目渲染出两行', findByClass(tree, 'dst-ai-histrow').length === 2,
@@ -1661,11 +1687,8 @@ section('组件开关（设置 → 显示）');
   check('恢复开关后图表区回到正常',
     (() => { clickText('持仓'); return true; })(), null);
   await settle(10);
-  {
-    const trs = collect(tree).filter((n) => n.tag === 'tr' && n.props.onClick);
-    trs[0].props.onClick({ preventDefault() {}, stopPropagation() {} });
-    await settle(14);
-  }
+  // 前面的用例可能已经选中了别的行，这里只保证"详情区是展开的"（点选是切换式，连点会收起）
+  check('恢复后详情区能展开', await ensureRowSelected(), null);
   check('两种图都开时切换按钮回来了',
     btnTexts().includes('K线') && btnTexts().includes('分时') && btnTexts().includes('周K'), null);
 }
