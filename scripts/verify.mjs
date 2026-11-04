@@ -198,6 +198,7 @@ const ROUTE_LIST = [
   '/trades/save', '/trades/remove', '/trades/clear', '/trades/apply',
   '/alerts/save', '/alerts/remove', '/alerts/ack',
   '/ai/models', '/ai/analyze',
+  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear',
 ];
 check(`注册了 ${ROUTE_LIST.length} 条路由`, ctx.routes.size === ROUTE_LIST.length, [...ctx.routes.keys()]);
 for (const p of ROUTE_LIST) {
@@ -412,10 +413,12 @@ section('分时 /trends 与盘口 /orderbook');
 if (!OFFLINE) {
   const t = await call(ctx, '/trends?symbol=sh600519&days=1');
   check('分时 HTTP 200 + ok', t.status === 200 && t.json.ok === true, t.json.error);
-  check('分时返回 points 数组', Array.isArray(t.json.points) && t.json.points.length > 0, t.json.points && t.json.points.length);
-  check('单日分时 240~245 点', t.json.points.length >= 240 && t.json.points.length <= 245, t.json.points.length);
-  {
-    const pts = t.json.points;
+  // 上游掐连接（UND_ERR_SOCKET 等）时 points 会缺省，后面这组网络断言整体跳过，避免整个套件崩掉
+  const tPts = Array.isArray(t.json.points) ? t.json.points : [];
+  check('分时返回 points 数组', tPts.length > 0, tPts.length);
+  if (tPts.length) {
+    check('单日分时 240~245 点', tPts.length >= 240 && tPts.length <= 245, tPts.length);
+    const pts = tPts;
     check('分时点带 time/price/avg', pts.every((p) => p.time && typeof p.price === 'number'), pts[0]);
     check('分时时间为 HH:MM 升序', pts.every((p, i) => i === 0 || p.time >= pts[i - 1].time), `${pts[0].time}..${pts[pts.length - 1].time}`);
     check('分时最高价 >= 每个点价格', pts.every((p) => (t.json.high == null ? true : p.price <= t.json.high + 1e-6)), t.json.high);
@@ -423,7 +426,8 @@ if (!OFFLINE) {
     check('分时带昨收（用于算涨跌幅）', typeof t.json.prevClose === 'number' && t.json.prevClose > 0, t.json.prevClose);
   }
   const t5 = await call(ctx, '/trends?symbol=sh600519&days=5');
-  check('多日分时约 5 倍点数', t5.json.points.length > t.json.points.length * 3, t5.json.points.length);
+  const t5Pts = Array.isArray(t5.json.points) ? t5.json.points : [];
+  check('多日分时约 5 倍点数', t5Pts.length > tPts.length * 3, t5Pts.length);
   const tBad = await call(ctx, '/trends?symbol=');
   check('缺 symbol 返回结构化错误', tBad.json.ok === false && !!tBad.json.error, tBad.json);
 
@@ -726,7 +730,7 @@ section('AI 分析：数据包与流式回传');
 {
   const r = await call(ctx, '/ai/analyze', {
     method: 'POST',
-    body: { symbol, style: 'short', extra: '多看看量能', include: { book: false } },
+    body: { symbol, style: 'short', periods: ['day'], extra: '多看看量能', include: { book: false } },
   });
   check('HTTP 200', r.status === 200, r.status);
   check('内容是 NDJSON', /application\/x-ndjson/.test((r.headers || {})['Content-Type'] || ''), r.headers);
@@ -761,6 +765,102 @@ section('AI 分析：数据包与流式回传');
   check('user 消息带着用户附加要求', /多看看量能/.test(userText));
   check('调用带上了取消信号', !!sent.signal, typeof sent.signal);
   check('分时/盘口按 include 取舍（关掉盘口就没有盘口段）', !/【盘口】/.test(userText), null);
+}
+
+section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖网络）');
+{
+  const realFetch = globalThis.fetch;
+  const stub = (payload) => ({ ok: true, status: 200, text: async () => JSON.stringify(payload) });
+  const klineRows = [
+    '2026-10-16,1490,1500,1510,1480,12345,18000000,1.2,0.3,5,0.8',
+    '2026-10-15,1485,1495,1505,1475,11234,17000000,1.1,0.2,4,0.7',
+    '2026-10-14,1480,1490,1500,1470,10234,16000000,1.0,0.1,3,0.6',
+  ];
+  const trendRows = [
+    '2026-10-16 09:31,1495,1501,1502,1494,100,150100,1500.5',
+    '2026-10-16 09:32,1501,1503,1505,1500,120,180240,1501.2',
+    '2026-10-16 09:33,1503,1502,1506,1501,90,135180,1501.8',
+  ];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/api/qt/stock/kline/get')) {
+      return stub({ data: { name: '贵州茅台', klines: klineRows } });
+    }
+    if (u.includes('/api/qt/ulist.np/get')) {
+      return stub({
+        data: {
+          diff: [{
+            f12: '600519', f13: 1, f14: '贵州茅台', f2: 1680.5, f18: 1665, f3: 0.9, f4: 15.5,
+            f5: 1000, f6: 1600000000, f15: 1700, f16: 1670, f17: 1675,
+          }],
+        },
+      });
+    }
+    if (u.includes('/api/qt/stock/trends2/get')) {
+      return stub({ data: { name: '贵州茅台', preClose: 1495, trends: trendRows } });
+    }
+    return realFetch(url);
+  };
+  try {
+    ctx.llm = makeFakeLlm();
+    const r = await call(ctx, '/ai/analyze', {
+      method: 'POST',
+      body: { symbol, periods: ['day', 'week', 'month'], trendDays: 3, style: 'detail', include: { book: false } },
+    });
+    const done = r.lines[r.lines.length - 1];
+    check('多周期请求成功', done.type === 'done' && done.text === '看多', done);
+    check('done 带回历史记录 id', typeof done.recordId === 'string' && done.recordId.length > 0, done.recordId);
+    check('done 带回保存时间', typeof done.at === 'number' && done.at > 0, done.at);
+
+    const sent = ctx.llm.calls[ctx.llm.calls.length - 1];
+    const userText = sent.messages[1].content[0].text;
+    check('日K指标进包', userText.includes('【日K指标】'), null);
+    check('周K指标进包', userText.includes('【周K指标】'), null);
+    check('月K指标进包', userText.includes('【月K指标】'), null);
+    check('周K明细用「周」表头', userText.includes('周,开,高,低,收,量(手)'), null);
+    check('月K明细用「月」表头', userText.includes('月,开,高,低,收,量(手)'), null);
+    check('分时按 trendDays=3 取', userText.includes('【分时】3日'), (userText.match(/【分时】[^\n]*/) || [])[0]);
+    const metaEvt = r.lines[0];
+    check('meta 标出三个周期', ['日K指标', '周K指标', '月K指标'].every((k) => metaEvt.meta.has.includes(k)), metaEvt.meta.has);
+
+    const hist = await call(ctx, '/ai/history');
+    check('历史列表读得到', hist.json && hist.json.ok === true, hist.json && hist.json.error);
+    check('历史按时间倒序，最新一条在前', hist.json.items.length >= 2 && hist.json.items[0].id === done.recordId,
+      hist.json.items.map((x) => x.id));
+    const h0 = hist.json.items[0];
+    check('历史记录带标的名', h0.symbol === symbol && h0.name === '贵州茅台', [h0.symbol, h0.name]);
+    check('历史记录带模型/风格', h0.model === 'deepseek-v4-flash' && h0.style === 'detail', h0);
+    check('历史记录带周期列表', Array.isArray(h0.periods) && h0.periods.map((p) => p.period).join(',') === 'day,week,month', h0.periods);
+    check('历史记录带分时天数', h0.trendDays === 3, h0.trendDays);
+    check('历史摘要带数据来源与字数', Array.isArray(h0.has) && h0.has.length > 0 && h0.chars > 100, [h0.chars, h0.has]);
+    check('列表里不放全文（只放摘要）', typeof h0.text === 'undefined' && typeof h0.snippet === 'string' && h0.snippet.length > 0,
+      Object.keys(h0));
+
+    const full = await call(ctx, `/ai/history/get?id=${h0.id}`);
+    check('能取回历史全文', full.json && full.json.ok === true && full.json.item.text === '看多', full.json);
+    check('取全文时周期信息完整', full.json.item.periods.length === 3, full.json.item.periods);
+
+    // 落盘验证：历史写在同一个 portfolio.json 里
+    const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf8'));
+    check('历史记录真的落盘了', Array.isArray(onDisk.analyses) && onDisk.analyses.some((a) => a.id === done.recordId),
+      Array.isArray(onDisk.analyses) ? onDisk.analyses.length : onDisk.analyses);
+
+    const missing = await call(ctx, '/ai/history/get?id=nope');
+    check('取不存在的历史给中文提示', missing.json && missing.json.ok === false && /不存在|删除/.test(missing.json.error), missing.json);
+
+    const rm = await call(ctx, '/ai/history/remove', { method: 'POST', body: { id: h0.id } });
+    check('能删除一条历史', rm.json && rm.json.ok === true && rm.json.removed === true, rm.json);
+    const after = await call(ctx, '/ai/history');
+    check('删除后条数减一', after.json.items.length === hist.json.items.length - 1 &&
+      !after.json.items.some((x) => x.id === h0.id), after.json.items.length);
+
+    const cleared = await call(ctx, '/ai/history/clear', { method: 'POST', body: {} });
+    check('能清空历史', cleared.json && cleared.json.ok === true && cleared.json.cleared >= 1, cleared.json);
+    const empty = await call(ctx, '/ai/history');
+    check('清空后列表为空', empty.json.items.length === 0, empty.json.items.length);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 }
 
 section('AI 分析：失败与边界');

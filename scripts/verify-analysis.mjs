@@ -231,6 +231,43 @@ section('数据包与消息');
   check('额外要求会拼进去', /只看量能/.test(buildMessages(pack, { extra: '只看量能' })[1].content), null);
 }
 
+section('多周期 K 线（日K/周K/月K）');
+{
+  const day = {
+    period: 'day', label: '日K',
+    summary: summarizeCandles(CANDLES), text: condenseCandles(CANDLES, 10),
+  };
+  const week = {
+    period: 'week', label: '周K',
+    summary: summarizeCandles(CANDLES), text: condenseCandles(CANDLES, 10, '周K'),
+  };
+  const month = {
+    period: 'month', label: '月K',
+    summary: summarizeCandles(CANDLES), text: condenseCandles(CANDLES, 10, '月K'),
+  };
+  const pack = buildDataPack({
+    symbol: 'sh600519', name: '贵州茅台', code: '600519',
+    klines: [day, week, month],
+    asOf: new Date('2026-10-16T07:00:00Z'),
+  });
+  check('含日K指标段', pack.text.includes('【日K指标】'), null);
+  check('含周K指标段', pack.text.includes('【周K指标】'), null);
+  check('含月K指标段', pack.text.includes('【月K指标】'), null);
+  check('周K明细表头用「周」', pack.text.includes('周,开,高,低,收,量(手)'), null);
+  check('月K明细表头用「月」', pack.text.includes('月,开,高,低,收,量(手)'), null);
+  check('周K指标用「周」作单位', /20周高/.test(pack.text) && /近5周/.test(pack.text), null);
+  check('月K指标用「月」作单位', /20月高/.test(pack.text) && /近5月/.test(pack.text), null);
+  check('meta 列出三个周期指标', ['日K指标', '周K指标', '月K指标'].every((k) => pack.meta.has.includes(k)), pack.meta.has);
+  check('meta 记录 periods', Array.isArray(pack.meta.periods) && pack.meta.periods.join(',') === 'day,week,month',
+    pack.meta.periods);
+  check('界面清单能显示周K/月K', describePack(pack.meta).includes('周K指标') && describePack(pack.meta).includes('月K指标'),
+    describePack(pack.meta));
+  check('condenseCandles 默认表头未变', condenseCandles(CANDLES, 5).startsWith('日期,开,高,低,收,量(手)'), null);
+  check('单周期兼容路径仍输出【日K指标】',
+    buildDataPack({ symbol: 'x', name: 'X', code: '1', candleSummary: day.summary, candleText: day.text })
+      .text.includes('【日K指标】'), null);
+}
+
 console.log(`\n==== 通过 ${pass} / 失败 ${fail} ====`);
 if (fail) {
   console.log('失败项:');

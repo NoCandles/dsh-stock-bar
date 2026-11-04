@@ -27,12 +27,19 @@ POST /api/stock-bar/alerts/remove    删预警
 POST /api/stock-bar/alerts/ack       确认触发（重新武装）
 GET  /api/stock-bar/ai/models        dsh-llm 里的供应商与模型目录 + 当前选择
 POST /api/stock-bar/ai/analyze       AI 分析：取数→组装数据包→调模型，NDJSON 流式回传
+GET  /api/stock-bar/ai/history       AI 分析历史列表（摘要，不含全文）
+GET  /api/stock-bar/ai/history/get   取一条历史全文（?id=）
+POST /api/stock-bar/ai/history/remove 删一条历史
+POST /api/stock-bar/ai/history/clear  清空历史
 ```
 
 `/ai/analyze` 的响应是 `Content-Type: application/x-ndjson`，一行一个事件：
 `meta` / `reasoning` / `delta` / `done` / `error`。模型没配、取不到行情、没指定模型这些情况也走
 **合法 JSON + `ok:false`**，客户端先看 Content-Type 再决定怎么读。
 请求里的 `symbol` 可以传 `600519`、`sh600519` 或拼音，宿主会先归一化再取数。
+喂给模型的数据窗口可以按需组合：`periods`（`day`/`week`/`month`，可多选，缺省回落到 `period`）
+决定 K 线周期，`trendDays`（1..5）决定分时天数；`include` 里再分别关掉 `kline`/`trend`/`book`/
+`trades`/`indexes`。分析成功落库后会历史记录一条，`done` 事件里带回 `recordId` / `at`。
 
 行情按「主源失败自动降级」实现（东方财富 / 腾讯 / 新浪），全部放在
 `lib/providers.js`，`scripts/probe.mjs` 可以直接打真实接口跑连通性。
@@ -44,20 +51,20 @@ POST /api/stock-bar/ai/analyze       AI 分析：取数→组装数据包→调�
 
 ## 开发与自检
 
-四个脚本，共 **780 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **850 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
 # 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、错误兜底（假 ctx，进程内）
-node scripts/verify.mjs            # 249 条
+node scripts/verify.mjs            # 279 条
 
 # 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 275 条（含侧边栏接线与渲染）
+node scripts/verify-client.mjs     # 299 条（含侧边栏接线与渲染、AI 历史与周期选择）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
-node scripts/verify-live.mjs       # 173 条
+node scripts/verify-live.mjs       # 177 条
 
 # 4) AI 数据包（不需要网络与模型）：指标计算、消息组装、简版/详细两种口径
-node scripts/verify-analysis.mjs   # 83 条
+node scripts/verify-analysis.mjs   # 95 条
 ```
 
 再加三个探针：
@@ -131,6 +138,11 @@ node scripts/peek-pack.mjs sh600519 short
     `@deepseek-ai/*` 是指向已消失的 G: 源码目录的坏 junction，直接 import 会炸。
   - 数据包全部现算：日K的 MA5/10/20/60、区间涨跌、量比，分时的均价与尾盘走势，盘口五档与委比，
     持仓的成本/浮盈/当日盈亏，流水的已实现盈亏与胜率，大盘指数。**模型只看到这些数字**，看不到你的账户。
+  - 数据窗口可选：K 线支持日K/周K/月K 同时喂（`periods` 数组，每个周期各算各的指标与表头），
+    分时支持 1/3/5 日（`trendDays`）；界面的勾选存在 `settings.aiKline/aiWeek/aiMonth/aiTrendDays`。
+  - 每次分析成功写进 `portfolio.json` 的 `analyses`（最多 50 条，`normalizeData` 容错加载）；
+    列表接口只回摘要和 140 字片段，点开才取全文，`done.recordId` 就是新记录的 id。
+    分析状态在客户端提升成模块级单例，切标签页/侧边栏来回不会中断流式输出，也不会丢正文。
   - `style: short` 限字数、`style: detail` 放开；`extra` 会把用户的额外要求拼进去。
   - 流式事件：`meta`（数据包统计 + 已喂数据来源）→ `reasoning`（思考过程，界面折叠显示）→
     `delta`（正文增量）→ `done`（完整正文 + token 用量 + 耗时 + finish）。客户端跨 chunk 拼行，

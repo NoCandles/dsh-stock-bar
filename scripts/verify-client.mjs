@@ -213,10 +213,15 @@ const AI_EVENTS = [
 ];
 const AI_LINES = AI_EVENTS.map((e) => JSON.stringify(e));
 const analyzeLog = [];
+/** 历史分析（内存版）：POST /ai/analyze 成功就追加一条，供 /ai/history* 路由使用 */
+const AI_HISTORY = [];
 
-function aiStreamResponse() {
+function aiStreamResponse(recordId) {
   const enc = new TextEncoder();
-  const bytes = enc.encode(`${AI_LINES.join('\n')}\n`);
+  const events = recordId
+    ? AI_EVENTS.map((e) => (e.type === 'done' ? { ...e, recordId, at: 1760000000000 } : e))
+    : AI_EVENTS;
+  const bytes = enc.encode(`${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
   const cuts = [];
   for (let at = 0; at < bytes.length; at += 17) cuts.push(bytes.slice(at, at + 17));
   let i = 0;
@@ -281,8 +286,54 @@ function fakeFetch(url, init = {}) {
     body = AI_MODELS;
   } else if (u.includes('/ai/analyze')) {
     // 宿主契约：POST /ai/analyze -> NDJSON 流；先把请求体记下来供断言
-    try { analyzeLog.push(JSON.parse(init.body || '{}')); } catch { analyzeLog.push({}); }
-    return aiStreamResponse();
+    let req = {};
+    try { req = JSON.parse(init.body || '{}'); } catch { req = {}; }
+    analyzeLog.push(req);
+    // 宿主在 done 之前把记录落盘，并把 id/at 带回 done 事件
+    const rec = {
+      id: `h${AI_HISTORY.length + 1}`,
+      at: 1760000000000 + AI_HISTORY.length,
+      symbol: req.symbol || MAOTAI,
+      name: '贵州茅台',
+      provider: req.provider || 'deep',
+      model: req.model || 'deepseek-v4-flash',
+      style: req.style === 'detail' ? 'detail' : 'short',
+      periods: (Array.isArray(req.periods) && req.periods.length ? req.periods : ['day'])
+        .map((p) => ({ period: p, label: p === 'week' ? '周K' : p === 'month' ? '月K' : '日K' })),
+      trendDays: Number(req.trendDays) || 1,
+      chars: 1234,
+      has: ['日K指标', '日K明细'],
+      text: AI_ANSWER,
+      usage: { inputTokens: 900, outputTokens: 120 },
+      elapsedMs: 2100,
+      finish: 'stop',
+      error: null,
+    };
+    AI_HISTORY.unshift(rec);
+    return aiStreamResponse(rec.id);
+  } else if (u.includes('/ai/history/get')) {
+    const id = new URL(u, 'http://x').searchParams.get('id');
+    const hit = AI_HISTORY.find((h) => h.id === id);
+    body = hit ? { ok: true, item: hit } : { ok: false, error: `找不到这条历史记录：${id}` };
+  } else if (u.includes('/ai/history/remove')) {
+    let patch = {};
+    try { patch = JSON.parse(init.body || '{}'); } catch { /* 空补丁 */ }
+    const i = AI_HISTORY.findIndex((h) => h.id === patch.id);
+    if (i >= 0) AI_HISTORY.splice(i, 1);
+    body = { ok: true, removed: i >= 0 };
+  } else if (u.includes('/ai/history/clear')) {
+    const n = AI_HISTORY.length;
+    AI_HISTORY.length = 0;
+    body = { ok: true, cleared: n };
+  } else if (u.includes('/ai/history')) {
+    // 列表只回摘要（不含 text），和宿主契约一致
+    body = {
+      ok: true,
+      items: AI_HISTORY.map((h) => {
+        const { text, ...rest } = h;
+        return { ...rest, snippet: String(text).replace(/\s+/g, ' ').slice(0, 40) };
+      }),
+    };
   } else if (u.includes('/settings/save')) {
     // 宿主契约：lib/index.js:314-323 返回 { ok:true, settings }，客户端 patchSettings
     // 直接读 data.settings（lib/client.js:283-286），缺了就等于把 settings 置空。
@@ -1394,6 +1445,78 @@ section('AI 分析');
   check('流结束后光标消失', findByClass(tree, 'dst-ai-cursor').length === 0,
     findByClass(tree, 'dst-ai-cursor').length);
   check('底部有「不构成投资建议」提示', /不构成投资建议/.test(allText(tree)), null);
+
+  // —— 数据窗口：日K/周K/月K + 分时 1/3/5 日 ——
+  const aiToggle = (label) => collect(tree).find((n) => n.tag === 'label'
+    && String(n.props.className || '').split(/\s+/).includes('dst-ai-toggle')
+    && String(allText(n)).trim() === label);
+  const aiInput = (label) => {
+    const l = aiToggle(label);
+    return l ? (l.kids || []).find((k) => k.tag === 'input') : null;
+  };
+  const daysSel = () => selects().find((s) => String(s.props.className || '').includes('dst-ai-days')) || null;
+  check('数据窗口有日K/周K/月K 三档',
+    ['日K', '周K', '月K'].every((l) => !!aiToggle(l)), null);
+  check('周K/月K 默认不喂（老设置里没这个键，保持不勾）',
+    !!aiInput('周K') && aiInput('周K').props.checked === false
+    && !!aiInput('月K') && aiInput('月K').props.checked === false,
+    `${aiInput('周K') && aiInput('周K').props.checked}/${aiInput('月K') && aiInput('月K').props.checked}`);
+  check('分时天数选择器默认 1 日', !!daysSel() && daysSel().props.value === '1',
+    daysSel() && daysSel().props.value);
+  check('分时天数有 1/3/5 日三档',
+    !!daysSel() && ['1日', '3日', '5日'].every((l) => allText(daysSel()).includes(l)), null);
+
+  aiInput('周K').props.onChange({ target: { checked: true } });
+  await settle(12);
+  check('勾上周K后写进设置', STATE.settings.aiWeek === true, STATE.settings.aiWeek);
+  daysSel().props.onChange({ target: { value: '3' } });
+  await settle(10);
+  check('分时天数写进设置', STATE.settings.aiTrendDays === 3, STATE.settings.aiTrendDays);
+
+  const before2 = analyzeLog.length;
+  check('再点「重新分析」', clickText('重新分析'));
+  await settle(30);
+  const req2 = analyzeLog[analyzeLog.length - 1] || {};
+  check('重新分析的请求带上多周期', Array.isArray(req2.periods) && req2.periods.join(',') === 'day,week',
+    JSON.stringify(req2.periods));
+  check('重新分析的请求带上分时天数', req2.trendDays === 3, req2.trendDays);
+  check('分析完成后历史多了一条', analyzeLog.length === before2 + 1, analyzeLog.length);
+
+  // —— 切走标签再切回来，正文要还在（状态已提升到模块级单例）——
+  check('切到「持仓」标签', clickText('持仓'));
+  await settle(16);
+  check('切回「AI 分析」标签', clickText('AI 分析'));
+  await settle(16);
+  check('切回来正文还在', /量能温和，盘口买盘 814 手。/.test(allText(tree)), null);
+  check('切回来按钮仍是「重新分析」', /重新分析/.test(allText(tree)), null);
+
+  // —— 历史记录：列表 / 回看 / 删除 / 清空 ——
+  check('历史区块显示条数', /历史分析（2）/.test(allText(tree)), null);
+  check('历史条目渲染出两行', findByClass(tree, 'dst-ai-histrow').length === 2,
+    findByClass(tree, 'dst-ai-histrow').length);
+  check('历史条目带摘要片段', findByClass(tree, 'dst-ai-histsnip').length === 2,
+    findByClass(tree, 'dst-ai-histsnip').length);
+  const histMain = findByClass(tree, 'dst-ai-histmain')[0];
+  check('历史条目可点击回看', !!histMain && typeof histMain.props.onClick === 'function', null);
+  histMain.props.onClick();
+  await settle(20);
+  check('回看历史后显示全文', /量能温和，盘口买盘 814 手。/.test(allText(tree)), null);
+  check('回看历史打上「历史记录」标记',
+    findByClass(tree, 'dst-pill').some((n) => /历史记录/.test(allText(n))), null);
+
+  let histRow = findByClass(tree, 'dst-ai-histrow')[0];
+  const delBtn = histRow ? collect(histRow).find((n) => n.tag === 'button') : null;
+  check('历史条目带删除按钮', !!delBtn, null);
+  delBtn.props.onClick({ stopPropagation() {} });
+  await settle(20);
+  check('删除一条历史后剩一条', findByClass(tree, 'dst-ai-histrow').length === 1,
+    findByClass(tree, 'dst-ai-histrow').length);
+
+  const clearBtn = collect(tree).find((n) => n.tag === 'button' && String(allText(n)).trim() === '清空历史');
+  check('有「清空历史」按钮', !!clearBtn, null);
+  clearBtn.props.onClick({});
+  await settle(20);
+  check('清空后历史为空', /历史分析（0）/.test(allText(tree)), null);
 
   // 换模型后应该把选择写回设置（下次打开还记住）
   check('切到第二个模型', (() => {
