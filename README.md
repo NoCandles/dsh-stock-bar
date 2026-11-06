@@ -9,7 +9,7 @@
 
 ## 功能
 
-- **行情条**：自选和持仓的实时价、涨跌幅、跑马灯（鼠标滚轮可横滑）、涨跌停标记，可折叠成标题栏小胶囊
+- **行情条**：自选和持仓的实时价、涨跌幅、跑马灯（鼠标滚轮可横滑）、涨跌停标记，可折叠成标题栏小胶囊；胶囊**注册进共享的顶栏停靠栈**，和其它顶栏插件（如「每日一关」）自动排队，不会互相压住
 - **图表**：分时（1/3/5 日）与 K 线（日/周/月/分钟），MA5/10/20/60、成交量、十字光标、成本虚线
 - **盘口**：五档买卖 + 委比
 - **持仓**：股数、成本价、市值、浮动与当日盈亏（按币种分开）
@@ -45,18 +45,19 @@ dsh plugin --profile desktop remove dsh-stock-bar
 ## 自检
 
 ```bash
-node scripts/verify.mjs           # 宿主 249 条
-node scripts/verify-client.mjs    # 客户端渲染 275 条
+node scripts/verify.mjs           # 宿主 249 条（需要联网接口，离线用 --offline）
+node scripts/verify-client.mjs    # 客户端渲染 312 条
 node scripts/verify-live.mjs      # 真 HTTP 端到端 173 条
-node scripts/verify-analysis.mjs  # AI 数据包 83 条
+node scripts/verify-analysis.mjs  # AI 数据包 95 条
 ```
 
-合计 780 条断言，不需要 DSH，也不需要任何密钥。
+合计 829 条断言，不需要 DSH，也不需要任何密钥。
 
 ## 说明
 
 - 行情来自东方财富与腾讯的公开接口，**不构成投资建议**；插件不做交易
 - 行情条在 DSH 窗口内，不是覆盖全桌面的悬浮窗
+- 折叠胶囊不自己写坐标，而是 `createPortal` 进共享容器 `#dsh-topbar-dock`，靠 flex `order` 与其它顶栏插件排队（本插件 `order:40` 靠左，「每日一关」`order:90` 靠右）；容器 `pointer-events:none`，只有子项吃点击
 - 只改 `lib/client.js` 刷新页面即可；改了 `lib/index.js`（宿主）必须重启 DSH
 
 接口、实现细节与已知限制见 [docs/notes.md](docs/notes.md)，版本记录见 [CHANGELOG.md](CHANGELOG.md)。

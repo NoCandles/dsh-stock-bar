@@ -543,7 +543,19 @@ const document = {
     return null;
   },
   querySelectorAll: () => [],
-  getElementById: () => null,
+  // 真实现 getElementById：停靠栈容器靠它复用，测不出复用就验证不了「两个插件共用一个队列」
+  getElementById(id) {
+    const walk = (n) => {
+      if (!n) return null;
+      if (n.__attrs && n.__attrs.id === id) return n;
+      for (const c of (n.children || [])) {
+        const hit = walk(c);
+        if (hit) return hit;
+      }
+      return null;
+    };
+    return walk(bodyEl) || walk(headEl);
+  },
   addEventListener() {}, removeEventListener() {},
   hidden: false, visibilityState: 'visible',
 };
@@ -790,7 +802,11 @@ check('顶层只有 __ModuleLoader__.load 一次', (code.match(/__ModuleLoader__
   (code.match(/__ModuleLoader__\.load\(/g) || []).length);
 check('没有顶层 import/export（浏览器 bundle 不走 ESM）', !/^\s*(import|export)\s/m.test(code));
 check('没有 require() 客户端宿主包', !/require\(['"]@deepseek-ai\//.test(code));
-check('没有裸 npm 依赖', !/require\(['"](?!react['"])/.test(code), (code.match(/require\(['"][^'"]+['"]\)/g) || []));
+// react-dom 是宿主模块表里就有的包（官方 settings-general / plugin-manager 也直接 require 它），
+// 这里允许 react 和 react-dom，别的第三方包一律不行
+check('没有裸 npm 依赖（只允许 react / react-dom）',
+  !/require\(['"](?!(?:react|react-dom)['"])/.test(code),
+  (code.match(/require\(['"][^'"]+['"]\)/g) || []));
 
 const sandboxGlobals = {
   window, document, fetch: fakeFetch, getComputedStyle, ResizeObserver,
@@ -828,17 +844,24 @@ section('factory 与槽位注册');
 let mod = null;
 let factoryErr = null;
 const reactRequests = [];
+// react-dom 是 DSH 宿主模块表里就存在的包（官方 settings-general / plugin-manager 都 require 它）；
+// 这里给一个最小 stub，只用到 createPortal
+const reactDOMStub = { createPortal: (children) => children };
 try {
   mod = def.factory((name) => {
     reactRequests.push(name);
     if (name === 'react') return React;
+    if (name === 'react-dom') return reactDOMStub;
     throw new Error(`意外的模块请求: ${name}`);
   });
 } catch (e) {
   factoryErr = e;
 }
 check('factory(require) 不抛错', factoryErr === null, factoryErr && (factoryErr.stack || factoryErr.message));
-check('只请求了 react', reactRequests.length === 1 && reactRequests[0] === 'react', reactRequests);
+check('只请求了 react / react-dom',
+  reactRequests.every((n) => n === 'react' || n === 'react-dom')
+  && reactRequests.includes('react'),
+  reactRequests);
 check('返回 { inject, apply }', mod && Array.isArray(mod.inject) && typeof mod.apply === 'function', mod && Object.keys(mod));
 check("inject 恰好是 ['slots']", JSON.stringify(mod.inject) === '["slots"]', mod.inject);
 check('factory 内没有副作用（未注入样式）', styleTags.length === 0, styleTags.length);
@@ -1704,22 +1727,33 @@ section('折叠态');
     check('折叠不抛错', err === null, err && err.message);
     await settle(8);
     check('折叠态不再渲染完整顶栏', findByClass(tree, 'dst-bar').length === 0, findByClass(tree, 'dst-bar').length);
-    // 折叠胶囊改用 .dst-dock：它是 position:fixed 的独立元素，
-    // 靠 dock 测量出来的 top/right 钉进标题栏右侧空白区，不再压正文
+    // 折叠胶囊改用 .dst-dock：它现在是共享顶栏停靠栈 #dsh-topbar-dock 里的一个 flex 项，
+    // 位置由队列 + order 决定（不再自己算 top/right 去抢坐标）
     const dockEls = findByClass(tree, 'dst-dock');
     check('折叠态仍渲染小胶囊', dockEls.length >= 1, dockEls.length);
     const dockStyle = (dockEls[0] && dockEls[0].props && dockEls[0].props.style) || {};
-    check('胶囊钉在标题栏右侧（有 top 和 right，不用 left:0 铺满）',
-      typeof dockStyle.top === 'string' && typeof dockStyle.right === 'string' && dockStyle.left === undefined,
+    check('胶囊不再自己钉坐标（不写 top/right/bottom/left，交给停靠栈）',
+      dockStyle.top === undefined && dockStyle.right === undefined
+      && dockStyle.bottom === undefined && dockStyle.left === undefined,
       dockStyle);
     check('胶囊标了 no-drag 的样式类（标题栏是拖拽区，不然点不动）',
       /\.dst-dock\{[^}]*-webkit-app-region:no-drag/.test(source), null);
     check('胶囊默认半透明（不用它时几乎看不见）',
       /\.dst-dock\{[^}]*opacity:\.55/.test(source) && /\.dst-dock:hover[^{]*\{[^}]*opacity:1/.test(source), null);
-    // 没有标题栏可借时（普通浏览器）退到右下角，别又压住工具栏
+    // 注册进共享顶栏停靠栈：容器 id 约定 + portal + order 排队 + 引用计数释放
     const flat = source.replace(/\s+/g, ' ');
-    check('无标题栏时退到右下角（bottom+right，而不是又用 top）',
-      /dock\.inCaption \? \{ top: /.test(flat) && /bottom: '14px', right: '14px'/.test(flat), null);
+    check('折叠胶囊走 createPortal 注册进共享顶栏停靠栈',
+      source.includes("const TOPBAR_DOCK_ID = 'dsh-topbar-dock'")
+      && source.includes('createPortal')
+      && /h\(TopbarSlot, null, h\('div', \{ className: 'dst-dock'/.test(flat), null);
+    check('胶囊靠 order 排队（与「每日一关」共用一条队列，不会重叠）',
+      /\.dst-dock\{[^}]*order:40/.test(source.replace(/\s+/g, ' ')), null);
+    check('容器自己不吃点击、只让子项吃',
+      /#dsh-topbar-dock\{[^}]*pointer-events:none/.test(source.replace(/\s+/g, ' '))
+      && /#dsh-topbar-dock > \*\{pointer-events:auto\}/.test(source.replace(/\s+/g, ' ')), null);
+    check('容器有引用计数，卸载后不留垃圾节点',
+      source.includes('acquireTopbarDock') && source.includes('releaseTopbarDock')
+      && source.includes('__dshTopbarCount'), null);
   }
 }
 

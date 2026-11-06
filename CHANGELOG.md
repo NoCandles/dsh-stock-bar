@@ -1,5 +1,21 @@
 # 更新日志
 
+## 1.2.1 — 2026-11-06
+
+### 折叠胶囊改为注册进共享顶栏停靠栈
+- **不再自己抢坐标**：原来折叠胶囊用 `position:fixed` 配合测量出来的 `top`/`right` 钉在标题栏右侧，
+  一旦右上角还有别的顶栏插件（比如「每日一关」的胶囊），两个组件就会互相压住。
+- 现在改用 `createPortal` 把胶囊渲染进共享容器 `#dsh-topbar-dock`，容器是 `display:flex` 的一行，
+  各插件靠 `order` 排队：本插件 `order:40`（靠左），「每日一关」`order:90`（靠右）。装多少个都不会重叠。
+- 容器按引用计数创建/销毁（`__dshTopbarCount` 归零才移除），卸载后不留垃圾节点；
+  容器 `pointer-events:none`、子项 `pointer-events:auto`，不吃正文点击。
+- 删掉 `dock` 落点测量（`setDock` / `inCaption` / `windowControlsOverlay.getTitlebarAreaRect` 那套），
+  少一个 1.5s 定时器；`setChromeTop` 保留，仍用于展开态行情条的纵向位置。
+- 没有 `react-dom` 或拿不到 DOM 时（离线 SSR 自检）自动降级为原地渲染，功能不受影响。
+- 自检脚本同步：`verify-client.mjs` 把「钉在标题栏右侧」「无标题栏退右下角」两条断言换成
+  「胶囊不再自己钉坐标」，并新增 portal 进停靠栈、`order:40`、容器点击穿透分层、引用计数四组断言，
+  现为 **312 条全通过**；`verify-analysis.mjs` **95 条全通过**。
+
 ## 1.2.0 — 2026-11-04
 
 ### AI 分析
