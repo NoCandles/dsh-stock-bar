@@ -1664,11 +1664,14 @@ section('AI 分析');
     findByClass(tree, 'dst-pill').some((n) => /历史记录/.test(allText(n))), null);
 
   // —— 就某段追问（对话随分析历史一起保存） ——
-  const askPill = collect(tree).find((n) => n.tag === 'span'
+  const askEntry = collect(tree).find((n) => n.tag === 'button'
+    && String(n.props.className || '').split(/\s+/).includes('dst-ai-askentry'));
+  check('正文底部有「继续问」入口', !!askEntry && /就这次分析继续问/.test(allText(askEntry)),
+    askEntry && allText(askEntry).slice(0, 40));
+  check('追问入口不在顶部 meta 行', !collect(tree).some((n) => n.tag === 'span'
     && String(n.props.className || '').split(/\s+/).includes('dst-pill')
-    && String(allText(n)).trim() === '追问');
-  check('正文旁有「追问」入口', !!askPill, null);
-  askPill.props.onClick({});
+    && String(allText(n)).trim() === '追问'), null);
+  askEntry.props.onClick({});
   await settle(12);
   check('追问面板打开', findByClass(tree, 'dst-ai-chat').length === 1,
     findByClass(tree, 'dst-ai-chat').length);
@@ -1695,9 +1698,9 @@ section('AI 分析');
   const savedRec = AI_HISTORY.find((h) => h.id === creq.analysisId) || {};
   check('追问随历史一起落盘', Array.isArray(savedRec.chats) && savedRec.chats.length === 2,
     savedRec.chats && savedRec.chats.length);
-  const closeAsk = collect(tree).find((n) => n.tag === 'span'
+  const closeAsk = collect(tree).find((n) => n.tag === 'button'
     && String(n.props.className || '').split(/\s+/).includes('dst-pill')
-    && String(allText(n)).trim() === '收起追问');
+    && String(allText(n)).trim() === '收起');
   check('追问面板可收起', !!closeAsk, null);
   if (closeAsk) { closeAsk.props.onClick({}); await settle(10); }
   check('收起后面板消失', findByClass(tree, 'dst-ai-chat').length === 0, null);
