@@ -213,6 +213,8 @@ const AI_EVENTS = [
 ];
 const AI_LINES = AI_EVENTS.map((e) => JSON.stringify(e));
 const analyzeLog = [];
+/** 追问请求体 */
+const chatLog = [];
 /** 历史分析（内存版）：POST /ai/analyze 成功就追加一条，供 /ai/history* 路由使用 */
 const AI_HISTORY = [];
 /** 模拟 v2 宿主：正文末尾带结构化计划，宿主已按它自动设了预警 */
@@ -250,6 +252,32 @@ function aiStreamResponse(recordId, extra) {
       },
     },
     json: () => Promise.resolve(AI_MODELS),
+  };
+}
+
+function ndjsonResponse(events) {
+  const enc = new TextEncoder();
+  const bytes = enc.encode(`${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
+  const cuts = [];
+  for (let at = 0; at < bytes.length; at += 17) cuts.push(bytes.slice(at, at + 17));
+  let i = 0;
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (k) => (/content-type/i.test(String(k)) ? 'application/x-ndjson; charset=utf-8' : null) },
+    body: {
+      getReader() {
+        return {
+          read() {
+            if (i >= cuts.length) return Promise.resolve({ done: true, value: undefined });
+            const value = cuts[i++];
+            return Promise.resolve({ done: false, value });
+          },
+          cancel() { return Promise.resolve(); },
+        };
+      },
+    },
+    json: () => Promise.resolve({ ok: false, error: '不是 JSON' }),
   };
 }
 
@@ -324,6 +352,7 @@ function fakeFetch(url, init = {}) {
       plan: AI_PLAN,
       pack: AI_PACK,
       alerts: ['al1', 'al2'],
+      chats: [],
     };
     AI_HISTORY.unshift(rec);
     return aiStreamResponse(rec.id, {
@@ -332,6 +361,29 @@ function fakeFetch(url, init = {}) {
       alertIds: rec.alerts,
       promptVersion: rec.promptVersion,
     });
+  } else if (u.includes('/ai/chat')) {
+    // 宿主契约：POST /ai/chat -> NDJSON 流，success 时落盘到对应历史记录的 chats
+    let req = {};
+    try { req = JSON.parse(init.body || '{}'); } catch { req = {}; }
+    chatLog.push(req);
+    const answer = '按数据包，3 日主力虽流出，但日K 20 日线仍在，单日流出不足以推翻反弹。';
+    const hit = AI_HISTORY.find((h) => h.id === req.analysisId);
+    if (hit) {
+      hit.chats = (hit.chats || []).concat([
+        { role: 'user', content: req.question, quote: req.quote, at: 1760000005000 },
+        { role: 'assistant', content: answer, at: 1760000006000 },
+      ]).slice(-20);
+    }
+    return ndjsonResponse([
+      { type: 'meta', analysisId: req.analysisId, provider: 'deep', model: 'deepseek-v4-flash' },
+      { type: 'delta', text: answer.slice(0, 10) },
+      { type: 'delta', text: answer.slice(10) },
+      {
+        type: 'done', analysisId: req.analysisId, text: answer,
+        usage: { inputTokens: 200, outputTokens: 80 }, finish: 'stop',
+        saved: !!hit, elapsedMs: 500,
+      },
+    ]);
   } else if (u.includes('/ai/history/get')) {
     const id = new URL(u, 'http://x').searchParams.get('id');
     const hit = AI_HISTORY.find((h) => h.id === id);
@@ -1610,6 +1662,45 @@ section('AI 分析');
     findByClass(tree, 'dst-ai-plan').length === 1 && /当时自动设置了 2 条/.test(allText(tree)), null);
   check('回看历史打上「历史记录」标记',
     findByClass(tree, 'dst-pill').some((n) => /历史记录/.test(allText(n))), null);
+
+  // —— 就某段追问（对话随分析历史一起保存） ——
+  const askPill = collect(tree).find((n) => n.tag === 'span'
+    && String(n.props.className || '').split(/\s+/).includes('dst-pill')
+    && String(allText(n)).trim() === '追问');
+  check('正文旁有「追问」入口', !!askPill, null);
+  askPill.props.onClick({});
+  await settle(12);
+  check('追问面板打开', findByClass(tree, 'dst-ai-chat').length === 1,
+    findByClass(tree, 'dst-ai-chat').length);
+  check('面板注明基于这次分析的数据包', /基于这次分析的数据包/.test(allText(tree)), null);
+  const chatInput = findByClass(tree, 'dst-ai-extra')
+    .find((n) => /追问这句/.test(String(n.props.placeholder || '')));
+  check('追问输入框可用', !!chatInput && chatInput.props.disabled === false,
+    chatInput && chatInput.props.disabled);
+  chatInput.props.onChange({ target: { value: '这段为什么说资金质量一般？' } });
+  await settle(6);
+  const sendBtn = collect(tree).find((n) => n.tag === 'button' && String(allText(n)).trim() === '发送');
+  check('有发送按钮', !!sendBtn, null);
+  const chatBefore = chatLog.length;
+  sendBtn.props.onClick({});
+  await settle(30);
+  check('发出了追问请求', chatLog.length === chatBefore + 1, chatLog.length);
+  const creq = chatLog[chatLog.length - 1] || {};
+  check('追问请求带上 analysisId 与问题',
+    !!creq.analysisId && creq.question === '这段为什么说资金质量一般？',
+    JSON.stringify(creq).slice(0, 120));
+  check('追问答案渲染进面板', /3 日主力虽流出/.test(allText(tree)), null);
+  check('一问一答进了消息区', findByClass(tree, 'dst-ai-msg').length === 2,
+    findByClass(tree, 'dst-ai-msg').length);
+  const savedRec = AI_HISTORY.find((h) => h.id === creq.analysisId) || {};
+  check('追问随历史一起落盘', Array.isArray(savedRec.chats) && savedRec.chats.length === 2,
+    savedRec.chats && savedRec.chats.length);
+  const closeAsk = collect(tree).find((n) => n.tag === 'span'
+    && String(n.props.className || '').split(/\s+/).includes('dst-pill')
+    && String(allText(n)).trim() === '收起追问');
+  check('追问面板可收起', !!closeAsk, null);
+  if (closeAsk) { closeAsk.props.onClick({}); await settle(10); }
+  check('收起后面板消失', findByClass(tree, 'dst-ai-chat').length === 0, null);
 
   let histRow = findByClass(tree, 'dst-ai-histrow')[0];
   const delBtn = histRow ? collect(histRow).find((n) => n.tag === 'button') : null;

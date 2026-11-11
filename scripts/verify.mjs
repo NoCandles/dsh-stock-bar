@@ -198,7 +198,7 @@ const ROUTE_LIST = [
   '/trades/save', '/trades/remove', '/trades/clear', '/trades/apply',
   '/alerts/save', '/alerts/remove', '/alerts/ack',
   '/ai/models', '/ai/analyze',
-  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear',
+  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear', '/ai/chat',
 ];
 check(`注册了 ${ROUTE_LIST.length} 条路由`, ctx.routes.size === ROUTE_LIST.length, [...ctx.routes.keys()]);
 for (const p of ROUTE_LIST) {
@@ -851,6 +851,43 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     const full = await call(ctx, `/ai/history/get?id=${h0.id}`);
     check('能取回历史全文', full.json && full.json.ok === true && full.json.item.text === '看多', full.json);
     check('取全文时周期信息完整', full.json.item.periods.length === 3, full.json.item.periods);
+
+    // —— 就这次分析追问：NDJSON 流、落盘、边界 ——
+    ctx.llm = makeFakeLlm({
+      chunks: [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'text-delta', index: 0, text: '单日流出不改中期判断。' },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ],
+    });
+    const chat = await call(ctx, '/ai/chat', {
+      method: 'POST',
+      body: {
+        analysisId: h0.id,
+        quote: '主力净流出',
+        question: '为什么还涨？',
+        history: [{ role: 'user', content: '先前问题' }, { role: 'assistant', content: '先前回答' }],
+      },
+    });
+    const chatMeta = chat.lines[0];
+    const chatDone = chat.lines[chat.lines.length - 1];
+    check('追问走 NDJSON 流', chatMeta.type === 'meta' && chatMeta.analysisId === h0.id, chatMeta);
+    check('追问流式返回正文', chatDone.type === 'done' && chatDone.text === '单日流出不改中期判断。', chatDone);
+    check('追问成功并落盘', chatDone.saved === true, chatDone.saved);
+    const sentChat = ctx.llm.calls[ctx.llm.calls.length - 1];
+    const chatUser = sentChat.messages[sentChat.messages.length - 1].content[0].text;
+    check('追问只喂引用段+问题', chatUser.includes('主力净流出') && chatUser.includes('为什么还涨？'), null);
+    check('追问带上了这次分析的数据包', chatUser.includes('【标的】') || chatUser.includes('贵州茅台'), null);
+    const withChats = await call(ctx, `/ai/history/get?id=${h0.id}`);
+    check('追问随历史保存为一问一答',
+      Array.isArray(withChats.json.item.chats) && withChats.json.item.chats.length === 2
+      && withChats.json.item.chats[0].content === '为什么还涨？',
+      withChats.json.item.chats && withChats.json.item.chats.length);
+    const badChat = await call(ctx, '/ai/chat', { method: 'POST', body: { analysisId: h0.id, question: '  ' } });
+    check('空问题拒绝追问', badChat.json && badChat.json.ok === false && /问题/.test(badChat.json.error), badChat.json);
+    const missingChat = await call(ctx, '/ai/chat', { method: 'POST', body: { analysisId: 'nope', question: '问' } });
+    check('不存在的分析记录拒绝追问',
+      missingChat.json && missingChat.json.ok === false && /不存在/.test(missingChat.json.error), missingChat.json);
 
     // 落盘验证：历史写在同一个 portfolio.json 里
     const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf8'));

@@ -31,6 +31,7 @@ GET  /api/stock-bar/ai/history       AI 分析历史列表（摘要，不含全�
 GET  /api/stock-bar/ai/history/get   取一条历史全文（?id=）
 POST /api/stock-bar/ai/history/remove 删一条历史
 POST /api/stock-bar/ai/history/clear  清空历史
+POST /api/stock-bar/ai/chat          就某次分析/某段正文追问，NDJSON 流式回传
 ```
 
 `/ai/analyze` 的响应是 `Content-Type: application/x-ndjson`，一行一个事件：
@@ -54,17 +55,17 @@ POST /api/stock-bar/ai/history/clear  清空历史
 
 ## 开发与自检
 
-四个脚本，共 **942 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **964 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
-# 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、多周期聚合、自动设预警、错误兜底（假 ctx，进程内）
-node scripts/verify.mjs            # 304 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
+# 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、多周期聚合、自动设预警、追问、错误兜底（假 ctx，进程内）
+node scripts/verify.mjs            # 313 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
 
-# 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、计划卡片、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 326 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照）
+# 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、计划卡片、追问面板、组件开关联动、卸载清理
+node scripts/verify-client.mjs     # 338 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照/追问）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
-node scripts/verify-live.mjs       # 177 条（其中 1 条依赖实时分时源）
+node scripts/verify-live.mjs       # 178 条（其中 1 条依赖实时分时源）
 
 # 4) AI 数据包（不需要网络与模型）：指标计算、消息组装、简版/详细两种口径
 node scripts/verify-analysis.mjs   # 135 条
@@ -159,6 +160,12 @@ node scripts/peek-pack.mjs sh600519 short
     分析状态在客户端提升成模块级单例，切标签页/侧边栏来回不会中断流式输出，也不会丢正文。
     切换自选（`target` 变化）时，如果面板里还是别的标的就自动 `reset()`，避免张冠李戴；
     正文可在 meta 行点「收起/展开」折叠，状态存在 `settings.aiCollapsed`，收起时只留一行摘要。
+  - **追问对话**（`POST /ai/chat`）：界面右侧（宽了常驻、窄了叠成抽屉）就这次分析继续问；
+    在正文里划选一段会浮出「问 AI」，引用原文带进对话。宿主只喂三样东西——
+    被引用的段落、这次分析保存的 `pack` 快照、最近 10 条对话，**不重拉行情、不重写整篇**；
+    system 明确要求「数据包里没有就说没有」。追问必须挂在 `recordId` 上（分析没落库/没跑完时界面禁用），
+    成功后由 `appendChat()` 写进 `analyses[i].chats`（一问一答，最多 20 条、单条正文 4000 字），
+    历史回看时连对话一起带出来；原复盘正文不会被改写。`done` 事件带 `analysisId` / `text` / `saved`。
   - `style: short` 限字数、`style: detail` 放开；`extra` 会把用户的额外要求拼进去。
   - 流式事件：`meta`（数据包统计 + 已喂数据来源）→ `reasoning`（思考过程，界面折叠显示）→
     `delta`（正文增量）→ `done`（完整正文 + token 用量 + 耗时 + finish）。客户端跨 chunk 拼行，
