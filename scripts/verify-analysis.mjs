@@ -12,6 +12,7 @@ import {
   sma, stdev, changePctOf,
   summarizeCandles, condenseCandles, summarizeTrends, summarizeBook,
   summarizeTrades, buildDataPack, buildMessages, describePack,
+  aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION,
   DEFAULT_KLINE_BARS,
 } from '../lib/analysis.js';
 
@@ -104,10 +105,11 @@ section('日K压缩');
 
 section('分时摘要');
 {
+  const mm = (n) => `${String(Math.floor(n / 60)).padStart(2, '0')}:${String(n % 60).padStart(2, '0')}`;
   const points = [];
   for (let i = 0; i < 241; i++) {
     points.push({
-      time: `09:30`.replace(/.*/, `0930`) + i,
+      time: mm(9 * 60 + 30 + i),
       open: 100,
       price: 100 + i * 0.1,
       high: 100 + i * 0.1 + 0.05,
@@ -123,8 +125,21 @@ section('分时摘要');
   check('最低价 = 首点价', near(t.low, 100, 1e-9), t.low);
   check('最高涨幅相对昨收', near(t.highPct, 24, 1e-9), t.highPct);
   check('均价线始终低于价格 -> 上方占比 100%', near(t.aboveAvgRatio, 100, 1e-9), t.aboveAvgRatio);
-  check('采样点数被压缩到 8 个左右', t.sample.length <= 9 && t.sample.length >= 8, t.sample.length);
+  check('关键时点采样在 8 个以上（旧版是等间隔 8 点）', t.sample.length >= 8 && t.sample.length <= 26, t.sample.length);
+  check('采样里含开盘后的关键时点 09:45', t.sample.some((s) => s.startsWith('09:45=')), t.sample.join(' '));
+  check('采样最后一个是收盘前点', t.sample[t.sample.length - 1].startsWith('13:30='), t.sample[t.sample.length - 1]);
+  check('单日 dayStats 只有一条', Array.isArray(t.dayStats) && t.dayStats.length === 1, t.dayStats && t.dayStats.length);
   check('空分时返回 null', summarizeTrends({ points: [] }) === null);
+
+  // 多日分时：同一条 points 拆成两天，按日概况应按天分组
+  const twoDays = points.map((p, i) => ({
+    ...p,
+    time: `${i < 121 ? '2026-10-15' : '2026-10-16'} ${mm(9 * 60 + 30 + (i < 121 ? i : i - 121))}`,
+  }));
+  const t2 = summarizeTrends({ prevClose: 100, days: 2, points: twoDays });
+  check('两日分时 -> dayStats 两条', t2.dayStats.length === 2, t2.dayStats.length);
+  check('dayStats 带日期与涨跌', /^\d{4}-\d{2}-\d{2}$/.test(t2.dayStats[0].date) && typeof t2.dayStats[0].chgPct === 'number');
+  check('两日采样按天分布', t2.sample.some((s) => s.startsWith('09:45=')) && t2.sample.filter((s) => s.startsWith('09:45=')).length === 2, t2.sample.length);
 }
 
 section('五档盘口摘要');
@@ -266,6 +281,65 @@ section('多周期 K 线（日K/周K/月K）');
   check('单周期兼容路径仍输出【日K指标】',
     buildDataPack({ symbol: 'x', name: 'X', code: '1', candleSummary: day.summary, candleText: day.text })
       .text.includes('【日K指标】'), null);
+}
+
+section('3日/5日 K 线聚合');
+{
+  const agg3 = aggregateCandles(CANDLES, 3);
+  const off = CANDLES.length % 3; // 从最新往回分组，最老的余数不参与
+  const g0 = CANDLES.slice(off, off + 3);
+  check('3 日聚合按 3 根一组（丢弃最老余数）', agg3.length === Math.floor(CANDLES.length / 3), agg3.length);
+  check('开盘价取组内第一根', agg3[0].open === g0[0].open, `${agg3[0].open} vs ${g0[0].open}`);
+  check('收盘价取组内最后一根', agg3[0].close === g0[2].close, `${agg3[0].close} vs ${g0[2].close}`);
+  check('最高价取组内极值', agg3[0].high === Math.max(g0[0].high, g0[1].high, g0[2].high), agg3[0].high);
+  check('最低价取组内极值', agg3[0].low === Math.min(g0[0].low, g0[1].low, g0[2].low), agg3[0].low);
+  check('成交量求和', agg3[0].volume === g0[0].volume + g0[1].volume + g0[2].volume, agg3[0].volume);
+  check('日期取组内最后一根', agg3[0].date === g0[2].date, agg3[0].date);
+  check('n=1 原样返回', aggregateCandles(CANDLES, 1).length === CANDLES.length, null);
+
+  const agg5 = aggregateCandles(CANDLES, 5);
+  check('5 日聚合按 5 根一组', agg5.length === Math.floor(CANDLES.length / 5), agg5.length);
+
+  const day3 = {
+    period: 'day3', label: '3日K',
+    summary: summarizeCandles(agg3), text: condenseCandles(agg3, 10, '3日K'),
+  };
+  const pack3 = buildDataPack({
+    symbol: 'sh600519', name: '贵州茅台', code: '600519', klines: [day3],
+    asOf: new Date('2026-10-16T07:00:00Z'),
+  });
+  check('3日K 也走多周期段落', pack3.text.includes('【3日K指标】'), null);
+  check('3日K 明细表头仍用「日」', pack3.text.includes('日期,开,高,低,收,量(手)'), null);
+  check('3日K meta.periods', pack3.meta.periods.join(',') === 'day3', pack3.meta.periods);
+}
+
+section('结构化计划解析（parsePlan / stripPlan）');
+{
+  const text = [
+    '### 一句话结论',
+    '偏多，量能温和放大。',
+    '',
+    '```json',
+    JSON.stringify({
+      stance: '偏多', confidence: 72, action: '持有', positionPct: 30,
+      levels: [
+        { label: '支撑', price: 1650, op: '<=' },
+        { label: '压力', price: 1720, op: '>=' },
+        { label: '失效', price: 1600 },
+      ],
+    }),
+    '```',
+  ].join('\n');
+  const plan = parsePlan(text);
+  check('抽到 stance/confidence/action/仓位',
+    plan && plan.stance === '偏多' && plan.confidence === 72 && plan.action === '持有' && plan.positionPct === 30,
+    JSON.stringify(plan));
+  check('levels 抽到 3 档', plan && plan.levels.length === 3, plan && plan.levels.length);
+  check('op 缺省按 label 推断', plan.levels[2].op === '<=' && plan.levels[2].label === '失效', JSON.stringify(plan.levels[2]));
+  check('stripPlan 去掉了 json 块', !stripPlan(text).includes('```') && stripPlan(text).includes('偏多'), stripPlan(text));
+  check('没有 JSON 时返回 null', parsePlan('只看量能，没有结论块。') === null, null);
+  check('坏 JSON 返回 null', parsePlan('```json\n{not json}\n```') === null, null);
+  check('PROMPT_VERSION 升到 v2', PROMPT_VERSION === 'stock-analysis-v2', PROMPT_VERSION);
 }
 
 console.log(`\n==== 通过 ${pass} / 失败 ${fail} ====`);

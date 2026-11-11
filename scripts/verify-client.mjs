@@ -215,11 +215,19 @@ const AI_LINES = AI_EVENTS.map((e) => JSON.stringify(e));
 const analyzeLog = [];
 /** 历史分析（内存版）：POST /ai/analyze 成功就追加一条，供 /ai/history* 路由使用 */
 const AI_HISTORY = [];
+/** 模拟 v2 宿主：正文末尾带结构化计划，宿主已按它自动设了预警 */
+const AI_PLAN = {
+  stance: '偏多', confidence: 72, action: '持有', positionPct: 30,
+  levels: [{ label: '支撑', price: 1650, op: '<=' }, { label: '压力', price: 1720, op: '>=' }],
+};
+const AI_PACK = '【标的】贵州茅台 sh600519\n【日K指标】最近 60 根 …\n【分时】09:45=1655.00';
 
-function aiStreamResponse(recordId) {
+function aiStreamResponse(recordId, extra) {
   const enc = new TextEncoder();
   const events = recordId
-    ? AI_EVENTS.map((e) => (e.type === 'done' ? { ...e, recordId, at: 1760000000000 } : e))
+    ? AI_EVENTS.map((e) => (e.type === 'done'
+      ? { ...e, recordId, at: 1760000000000, ...(extra || {}) }
+      : e))
     : AI_EVENTS;
   const bytes = enc.encode(`${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
   const cuts = [];
@@ -299,7 +307,11 @@ function fakeFetch(url, init = {}) {
       model: req.model || 'deepseek-v4-flash',
       style: req.style === 'detail' ? 'detail' : 'short',
       periods: (Array.isArray(req.periods) && req.periods.length ? req.periods : ['day'])
-        .map((p) => ({ period: p, label: p === 'week' ? '周K' : p === 'month' ? '月K' : '日K' })),
+        .map((p) => ({
+          period: p,
+          label: p === 'week' ? '周K' : p === 'month' ? '月K'
+            : p === 'day3' ? '3日K' : p === 'day5' ? '5日K' : '日K',
+        })),
       trendDays: Number(req.trendDays) || 1,
       chars: 1234,
       has: ['日K指标', '日K明细'],
@@ -308,9 +320,18 @@ function fakeFetch(url, init = {}) {
       elapsedMs: 2100,
       finish: 'stop',
       error: null,
+      promptVersion: 'stock-analysis-v2',
+      plan: AI_PLAN,
+      pack: AI_PACK,
+      alerts: ['al1', 'al2'],
     };
     AI_HISTORY.unshift(rec);
-    return aiStreamResponse(rec.id);
+    return aiStreamResponse(rec.id, {
+      plan: rec.plan,
+      alerts: rec.alerts.length,
+      alertIds: rec.alerts,
+      promptVersion: rec.promptVersion,
+    });
   } else if (u.includes('/ai/history/get')) {
     const id = new URL(u, 'http://x').searchParams.get('id');
     const hit = AI_HISTORY.find((h) => h.id === id);
@@ -330,8 +351,14 @@ function fakeFetch(url, init = {}) {
     body = {
       ok: true,
       items: AI_HISTORY.map((h) => {
-        const { text, ...rest } = h;
-        return { ...rest, snippet: String(text).replace(/\s+/g, ' ').slice(0, 40) };
+        const { text, pack, ...rest } = h;
+        return {
+          ...rest,
+          stance: h.plan ? h.plan.stance : '',
+          confidence: h.plan ? h.plan.confidence : null,
+          alertCount: Array.isArray(h.alerts) ? h.alerts.length : 0,
+          snippet: String(text).replace(/\s+/g, ' ').slice(0, 40),
+        };
       }),
     };
   } else if (u.includes('/settings/save')) {
@@ -1435,6 +1462,8 @@ section('AI 分析');
     `${STATE.settings.aiProvider}/${modelOpts().length}`);
   check('五个数据勾选项齐全',
     ['日K', '分时', '盘口', '流水', '大盘'].every((l) => allText(tree).includes(l)), null);
+  check('数据窗口还有 3日K/5日K/周K/月K 可选',
+    ['3日K', '5日K', '周K', '月K'].every((l) => allText(tree).includes(l)), null);
   check('额外要求输入框存在',
     collect(tree).some((n) => n.tag === 'input' && /额外要求/.test(String(n.props.placeholder || ''))), null);
   check('未开始时有说明文案', /让模型做一次复盘/.test(allText(tree)), null);
@@ -1451,6 +1480,19 @@ section('AI 分析');
   check('默认走简版', req.style === 'short', req.style);
   check('请求里带上数据勾选', !!req.include && req.include.kline === true && req.include.indexes === true,
     JSON.stringify(req.include));
+
+  // —— v2：结构化计划卡片 + 自动设预警说明 ——
+  const planCard = findByClass(tree, 'dst-ai-plan')[0];
+  check('结构化计划渲染成卡片', !!planCard, null);
+  check('卡片里有倾向/置信度/动作/仓位',
+    !!planCard && /偏多/.test(allText(planCard)) && /置信度 72/.test(allText(planCard))
+    && /持有/.test(allText(planCard)) && /仓位 30%/.test(allText(planCard)),
+    planCard && allText(planCard));
+  check('卡片列关键价位与提醒方向',
+    !!planCard && /¥1650\.00/.test(allText(planCard)) && /跌破提醒/.test(allText(planCard))
+    && /¥1720\.00/.test(allText(planCard)) && /涨到提醒/.test(allText(planCard)), null);
+  check('卡片说明自动设了几条预警', /自动设置了 2 条价格预警/.test(allText(tree)), null);
+  check('正文里不再裸露 json 块', !/```json/.test(allText(tree)) && !/"levels"/.test(allText(tree)), null);
 
   check('NDJSON 跨 chunk 拼行后正文完整', /量能温和，盘口买盘 814 手。/.test(allText(tree)), null);
   check('markdown 小标题渲染成块', findByClass(tree, 'dst-ai-h').length >= 1, findByClass(tree, 'dst-ai-h').length);
@@ -1492,6 +1534,15 @@ section('AI 分析');
   aiInput('周K').props.onChange({ target: { checked: true } });
   await settle(12);
   check('勾上周K后写进设置', STATE.settings.aiWeek === true, STATE.settings.aiWeek);
+  check('3日K/5日K 默认不喂', aiInput('3日K').props.checked === false && aiInput('5日K').props.checked === false,
+    `${aiInput('3日K').props.checked}/${aiInput('5日K').props.checked}`);
+  aiInput('3日K').props.onChange({ target: { checked: true } });
+  await settle(12);
+  check('勾上3日K写进设置', STATE.settings.aiDay3 === true, STATE.settings.aiDay3);
+  check('自动设预警开关默认开', !!aiInput('自动设预警') && aiInput('自动设预警').props.checked === true, null);
+  aiInput('自动设预警').props.onChange({ target: { checked: false } });
+  await settle(10);
+  check('关掉自动设预警写进设置', STATE.settings.aiAutoAlert === false, STATE.settings.aiAutoAlert);
   daysSel().props.onChange({ target: { value: '3' } });
   await settle(10);
   check('分时天数写进设置', STATE.settings.aiTrendDays === 3, STATE.settings.aiTrendDays);
@@ -1500,7 +1551,7 @@ section('AI 分析');
   check('再点「重新分析」', clickText('重新分析'));
   await settle(30);
   const req2 = analyzeLog[analyzeLog.length - 1] || {};
-  check('重新分析的请求带上多周期', Array.isArray(req2.periods) && req2.periods.join(',') === 'day,week',
+  check('重新分析的请求带上多周期', Array.isArray(req2.periods) && req2.periods.join(',') === 'day,day3,week',
     JSON.stringify(req2.periods));
   check('重新分析的请求带上分时天数', req2.trendDays === 3, req2.trendDays);
   check('分析完成后历史多了一条', analyzeLog.length === before2 + 1, analyzeLog.length);
@@ -1545,11 +1596,15 @@ section('AI 分析');
     findByClass(tree, 'dst-ai-histrow').length);
   check('历史条目带摘要片段', findByClass(tree, 'dst-ai-histsnip').length === 2,
     findByClass(tree, 'dst-ai-histsnip').length);
+  check('历史条目带结构化倾向', /偏多 72/.test(allText(tree)), null);
   const histMain = findByClass(tree, 'dst-ai-histmain')[0];
   check('历史条目可点击回看', !!histMain && typeof histMain.props.onClick === 'function', null);
   histMain.props.onClick();
   await settle(20);
   check('回看历史后显示全文', /量能温和，盘口买盘 814 手。/.test(allText(tree)), null);
+  check('回看历史能看当时的数据快照', /当时给模型的数据/.test(allText(tree)) && /【日K指标】/.test(allText(tree)), null);
+  check('回看历史也有结构化卡片与预警说明',
+    findByClass(tree, 'dst-ai-plan').length === 1 && /当时自动设置了 2 条/.test(allText(tree)), null);
   check('回看历史打上「历史记录」标记',
     findByClass(tree, 'dst-pill').some((n) => /历史记录/.test(allText(n))), null);
 

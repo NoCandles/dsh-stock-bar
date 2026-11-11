@@ -751,6 +751,7 @@ section('AI 分析：数据包与流式回传');
   check('usage 透传', done.usage && done.usage.inputTokens === 1234, done.usage);
   check('finish 为 stop，无错误', done.finish === 'stop' && !done.error, done);
   check('耗时被记录', typeof done.elapsedMs === 'number' && done.elapsedMs >= 0, done.elapsedMs);
+  check('没有 JSON 计划时 plan 为空、不设预警', !done.plan && done.alerts === 0, [done.plan, done.alerts]);
 
   const sent = ctx.llm.calls[ctx.llm.calls.length - 1];
   check('调用时带上了 provider/model', sent.provider === 'deep' && sent.model === 'deepseek-v4-flash', sent);
@@ -858,6 +859,94 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     check('能清空历史', cleared.json && cleared.json.ok === true && cleared.json.cleared >= 1, cleared.json);
     const empty = await call(ctx, '/ai/history');
     check('清空后列表为空', empty.json.items.length === 0, empty.json.items.length);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打桩）');
+{
+  const realFetch = globalThis.fetch;
+  const stub = (payload) => ({ ok: true, status: 200, text: async () => JSON.stringify(payload) });
+  // 6 根日K，3 根聚一根 -> 2 根 3 日K
+  const rows = [
+    '2026-10-16,1700,1690,1710,1685,12000,20000000,1.2,0.5,8,0.9',
+    '2026-10-15,1680,1700,1705,1675,11000,19000000,1.1,0.4,7,0.8',
+    '2026-10-14,1670,1680,1690,1660,10000,18000000,1.0,0.3,6,0.7',
+    '2026-10-13,1660,1670,1680,1650,9000,17000000,0.9,0.2,5,0.6',
+    '2026-10-12,1650,1660,1670,1640,8000,16000000,0.8,0.1,4,0.5',
+    '2026-10-11,1640,1650,1660,1630,7000,15000000,0.7,0.0,3,0.4',
+  ];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/api/qt/stock/kline/get')) return stub({ data: { name: '贵州茅台', klines: rows } });
+    if (u.includes('/api/qt/ulist.np/get')) {
+      return stub({
+        data: {
+          diff: [{
+            f12: '600519', f13: 1, f14: '贵州茅台', f2: 1680.5, f18: 1665, f3: 0.9, f4: 15.5,
+            f5: 1000, f6: 1600000000, f15: 1700, f16: 1670, f17: 1675,
+          }],
+        },
+      });
+    }
+    if (u.includes('/api/qt/stock/trends2/get')) {
+      return stub({ data: { name: '贵州茅台', preClose: 1670, trends: ['2026-10-16 09:31,1670,1680,1682,1668,100,167000,1675'] } });
+    }
+    return realFetch(url);
+  };
+  try {
+    const planText = [
+      '看多，量能温和。',
+      '```json',
+      JSON.stringify({
+        stance: '偏多', confidence: 66, action: '减仓', positionPct: 20,
+        levels: [{ label: '支撑', price: 1650, op: '<=' }, { label: '压力', price: 1720, op: '>=' }],
+      }),
+      '```',
+    ].join('\n');
+    ctx.llm = makeFakeLlm({
+      chunks: [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'text-delta', index: 0, text: planText },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ],
+    });
+    const r = await call(ctx, '/ai/analyze', {
+      method: 'POST',
+      body: { symbol, periods: ['day3'], include: { book: false } },
+    });
+    const done = r.lines[r.lines.length - 1];
+    check('3日K 请求成功', done.type === 'done' && done.finish === 'stop', done);
+    const sent = ctx.llm.calls[ctx.llm.calls.length - 1];
+    const userText = sent.messages[1].content[0].text;
+    check('3日K指标进包', userText.includes('【3日K指标】'), null);
+    check('3日K 明细表头仍用「日」', /日期,开,高,低,收,量\(手\)/.test(userText), null);
+    check('只勾 3日K 时不混入周/月', !userText.includes('【周K指标】') && !userText.includes('【月K指标】'), null);
+    check('meta 标出 3日K', r.lines[0].meta.has.includes('3日K指标'), r.lines[0].meta.has);
+
+    check('done 带回结构化计划', done.plan && done.plan.stance === '偏多' && done.plan.levels.length === 2, done.plan);
+    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v2', done.promptVersion);
+    check('关键价位自动转成两条预警', done.alerts === 2 && Array.isArray(done.alertIds) && done.alertIds.length === 2, done.alerts);
+
+    const st = await call(ctx, '/state');
+    const aiAlerts = (st.json.alerts || []).filter((a) => a.symbol === symbol && a.kind === 'price');
+    check('预警列表里真有这两条', aiAlerts.length >= 2, aiAlerts.map((a) => `${a.op}${a.value}`));
+    check('支撑设成跌破提醒、压力设成涨到提醒',
+      aiAlerts.some((a) => a.op === '<=' && a.value === 1650) && aiAlerts.some((a) => a.op === '>=' && a.value === 1720),
+      aiAlerts.map((a) => `${a.op}${a.value}`));
+    check('预警备注标明来自 AI', aiAlerts.every((a) => /^AI /.test(a.note || '')), aiAlerts.map((a) => a.note));
+
+    const one = await call(ctx, `/ai/history/get?id=${done.recordId}`);
+    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v2', one.json.item.promptVersion);
+    check('历史里存了结构化计划', one.json.item.plan && one.json.item.plan.stance === '偏多', one.json.item.plan);
+    check('历史里存了数据快照', typeof one.json.item.pack === 'string' && one.json.item.pack.includes('【3日K指标】'),
+      one.json.item.pack ? one.json.item.pack.length : one.json.item.pack);
+    check('历史里存了预警 id', Array.isArray(one.json.item.alerts) && one.json.item.alerts.length === 2, one.json.item.alerts);
+    const list = await call(ctx, '/ai/history');
+    check('历史摘要带倾向/置信度/预警数',
+      list.json.items[0].stance === '偏多' && list.json.items[0].confidence === 66 && list.json.items[0].alertCount === 2,
+      list.json.items[0]);
   } finally {
     globalThis.fetch = realFetch;
   }

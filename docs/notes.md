@@ -37,9 +37,12 @@ POST /api/stock-bar/ai/history/clear  清空历史
 `meta` / `reasoning` / `delta` / `done` / `error`。模型没配、取不到行情、没指定模型这些情况也走
 **合法 JSON + `ok:false`**，客户端先看 Content-Type 再决定怎么读。
 请求里的 `symbol` 可以传 `600519`、`sh600519` 或拼音，宿主会先归一化再取数。
-喂给模型的数据窗口可以按需组合：`periods`（`day`/`week`/`month`，可多选，缺省回落到 `period`）
-决定 K 线周期，`trendDays`（1..5）决定分时天数；`include` 里再分别关掉 `kline`/`trend`/`book`/
-`trades`/`indexes`。分析成功落库后会历史记录一条，`done` 事件里带回 `recordId` / `at`。
+喂给模型的数据窗口可以按需组合：`periods`（`day`/`day3`/`day5`/`week`/`month`，可多选，缺省回落到 `period`）
+决定 K 线周期（`day3`/`day5` 是宿主拿日K本地聚合出来的），`trendDays`（1..5）决定分时天数；
+`include` 里再分别关掉 `kline`/`trend`/`book`/`trades`/`indexes`。分析成功落库后会历史记录一条，
+`done` 事件里带回 `recordId` / `at` / `plan`（结构化计划）/ `alerts`（自动新建的预警条数）/ `promptVersion`。
+如果模型在正文末尾给了 json 计划且 `settings.aiAutoAlert` 没关，宿主会自动把关键价位设成价格预警
+（支撑/失效=跌破提醒，压力=涨到提醒，去重、过滤离谱价）。
 
 行情按「主源失败自动降级」实现（东方财富 / 腾讯 / 新浪），全部放在
 `lib/providers.js`，`scripts/probe.mjs` 可以直接打真实接口跑连通性。
@@ -51,17 +54,17 @@ POST /api/stock-bar/ai/history/clear  清空历史
 
 ## 开发与自检
 
-四个脚本，共 **860 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **918 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
-# 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、错误兜底（假 ctx，进程内）
-node scripts/verify.mjs            # 279 条
+# 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、多周期聚合、自动设预警、错误兜底（假 ctx，进程内）
+node scripts/verify.mjs            # 296 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
 
-# 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 309 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置）
+# 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、计划卡片、组件开关联动、卸载清理
+node scripts/verify-client.mjs     # 325 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
-node scripts/verify-live.mjs       # 177 条
+node scripts/verify-live.mjs       # 177 条（其中 1 条依赖实时分时源）
 
 # 4) AI 数据包（不需要网络与模型）：指标计算、消息组装、简版/详细两种口径
 node scripts/verify-analysis.mjs   # 95 条
@@ -120,7 +123,7 @@ node scripts/peek-pack.mjs sh600519 short
 - **样式**：`<style data-plugin-css="...">` 只注入一次（按 `data-plugin-css` 去重，HMR 重复执行不会叠加），
   颜色全部走 `--dsw-alias-*` 主题变量并给字面量兜底，红涨绿跌用插件自己的 `--dst-up` / `--dst-down`，
   暗色下由 `body[data-ds-dark-theme]` 覆盖。
-- **store 形状**：`{ version, settings, items, trades, alerts }`。`items`（持仓/自选）和 `trades`（流水）
+- **store 形状**：`{ version, settings, items, trades, alerts, analyses }`。`items`（持仓/自选）和 `trades`（流水）
   是**两本账**，互不自动覆盖；只有用户点「按流水同步持仓」才用 `computeRealized()` 的加权平均成本写回 items。
   老版本文件缺 `trades` / `alerts` / 新设置键时会自动补默认值，**升级不会丢持仓**（有专门的回归用例）。
 - **流水算法**：手续费计入成本。买 1000 股 @10 手续费 5 → 成本 10.005；再买 1000 @12 → 10.0025；
@@ -138,10 +141,17 @@ node scripts/peek-pack.mjs sh600519 short
     `@deepseek-ai/*` 是指向已消失的 G: 源码目录的坏 junction，直接 import 会炸。
   - 数据包全部现算：日K的 MA5/10/20/60、区间涨跌、量比，分时的均价与尾盘走势，盘口五档与委比，
     持仓的成本/浮盈/当日盈亏，流水的已实现盈亏与胜率，大盘指数。**模型只看到这些数字**，看不到你的账户。
-  - 数据窗口可选：K 线支持日K/周K/月K 同时喂（`periods` 数组，每个周期各算各的指标与表头），
-    分时支持 1/3/5 日（`trendDays`）；界面的勾选存在 `settings.aiKline/aiWeek/aiMonth/aiTrendDays`。
-  - 每次分析成功写进 `portfolio.json` 的 `analyses`（最多 50 条，`normalizeData` 容错加载）；
-    列表接口只回摘要和 140 字片段，点开才取全文，`done.recordId` 就是新记录的 id。
+  - 数据窗口可选：K 线支持日K/3日K/5日K/周K/月K 同时喂（`periods` 数组，每个周期各算各的指标与表头；
+    3日/5日 是日K 本地聚合，不额外打行情源），分时支持 1/3/5 日（`trendDays`）；
+    界面的勾选存在 `settings.aiKline/aiDay3/aiDay5/aiWeek/aiMonth/aiTrendDays`（日K/分时默认开，后补的周期显式勾才喂）。
+  - 分时采样按关键时点（09:35…14:57）各取最近一根，多日分时额外给「按日概况」。
+  - **结构化计划**：*OUTPUT_SPEC* 让模型在正文末尾追加 json 代码块（倾向/置信度/动作/仓位/关键价位+`op`），
+    宿主 `parsePlan()` 解析、`stripPlan()` 从展示正文里扣掉，客户端渲染成卡片。
+    默认按计划自动设价格预警（`settings.aiAutoAlert`，支撑/失效 `<=`、压力 `>=`，去重并过滤偏离现价 30% 的价位，
+    每只最多 4 条）。
+  - 每次分析成功写进 `portfolio.json` 的 `analyses`（最多 50 条，`normalizeData` 容错加载），
+    记录里额外存 `pack`（当时数据包快照，上限 2 万字）、`promptVersion`、`plan`、`alerts`（自动建预警 id）；
+    列表接口只回摘要和 140 字片段（含倾向/置信度/预警数），点开才取全文，`done.recordId` 就是新记录的 id。
     分析状态在客户端提升成模块级单例，切标签页/侧边栏来回不会中断流式输出，也不会丢正文。
     切换自选（`target` 变化）时，如果面板里还是别的标的就自动 `reset()`，避免张冠李戴；
     正文可在 meta 行点「收起/展开」折叠，状态存在 `settings.aiCollapsed`，收起时只留一行摘要。
