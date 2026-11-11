@@ -54,20 +54,20 @@ POST /api/stock-bar/ai/history/clear  清空历史
 
 ## 开发与自检
 
-四个脚本，共 **918 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **942 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
 # 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、多周期聚合、自动设预警、错误兜底（假 ctx，进程内）
-node scripts/verify.mjs            # 296 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
+node scripts/verify.mjs            # 304 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
 
 # 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、计划卡片、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 325 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照）
+node scripts/verify-client.mjs     # 326 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
 node scripts/verify-live.mjs       # 177 条（其中 1 条依赖实时分时源）
 
 # 4) AI 数据包（不需要网络与模型）：指标计算、消息组装、简版/详细两种口径
-node scripts/verify-analysis.mjs   # 95 条
+node scripts/verify-analysis.mjs   # 135 条
 ```
 
 再加三个探针：
@@ -145,6 +145,10 @@ node scripts/peek-pack.mjs sh600519 short
     3日/5日 是日K 本地聚合，不额外打行情源），分时支持 1/3/5 日（`trendDays`）；
     界面的勾选存在 `settings.aiKline/aiDay3/aiDay5/aiWeek/aiMonth/aiTrendDays`（日K/分时默认开，后补的周期显式勾才喂）。
   - 分时采样按关键时点（09:35…14:57）各取最近一根，多日分时额外给「按日概况」。
+  - **多日资金流与持仓成分股**：`fetchFundFlow`（东方财富 fflow/daykline，30 个交易日）给出今日主力/小中大成份、
+    3/5/10/20 日主力累计、连续流入/流出天数与最近 5 日逐日；`fetchEtfHoldings`（天天基金 F10 前十大重仓）
+    给出权重、今日/5 日主力，两者都进数据包，prompt 里明确「单日主力不能单独定多空、背离要解释」。
+    界面对应 `settings.aiFlow` / `aiHoldings`（默认开）。个股没有基金持仓时该段自动省略。
   - **结构化计划**：*OUTPUT_SPEC* 让模型在正文末尾追加 json 代码块（倾向/置信度/动作/仓位/关键价位+`op`），
     宿主 `parsePlan()` 解析、`stripPlan()` 从展示正文里扣掉，客户端渲染成卡片。
     默认按计划自动设价格预警（`settings.aiAutoAlert`，支撑/失效 `<=`、压力 `>=`，去重并过滤偏离现价 30% 的价位，

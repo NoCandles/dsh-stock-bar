@@ -11,8 +11,8 @@
 import {
   sma, stdev, changePctOf,
   summarizeCandles, condenseCandles, summarizeTrends, summarizeBook,
-  summarizeTrades, buildDataPack, buildMessages, describePack,
-  aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION,
+  summarizeTrades, summarizeFundFlow, summarizeHoldings, buildDataPack, buildMessages, describePack,
+  aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION, SYSTEM_PROMPT,
   DEFAULT_KLINE_BARS,
 } from '../lib/analysis.js';
 
@@ -339,7 +339,67 @@ section('结构化计划解析（parsePlan / stripPlan）');
   check('stripPlan 去掉了 json 块', !stripPlan(text).includes('```') && stripPlan(text).includes('偏多'), stripPlan(text));
   check('没有 JSON 时返回 null', parsePlan('只看量能，没有结论块。') === null, null);
   check('坏 JSON 返回 null', parsePlan('```json\n{not json}\n```') === null, null);
-  check('PROMPT_VERSION 升到 v2', PROMPT_VERSION === 'stock-analysis-v2', PROMPT_VERSION);
+  check('PROMPT_VERSION 升到 v3', PROMPT_VERSION === 'stock-analysis-v3', PROMPT_VERSION);
+}
+
+// ---------------------------------------------------------------------------
+// 资金流 / 成分股
+// ---------------------------------------------------------------------------
+{
+  console.log('\n-- 多日资金流与成分股 --');
+  const flow = {
+    symbol: 'sh515050', name: '通信ETF华夏',
+    days: [
+      { date: '2026-11-06', main: -5e7, small: 3e7, mid: 2e7, big: -2e7, superBig: -3e7, mainPct: -4.2, close: 0.63, chgPct: -3.1 },
+      { date: '2026-11-07', main: -2e7, small: 1e7, mid: 1e7, big: -1e7, superBig: -1e7, mainPct: -1.8, close: 0.64, chgPct: 1.6 },
+      { date: '2026-11-10', main: 8e6, small: -3e6, mid: -5e6, big: 4e6, superBig: 4e6, mainPct: 0.6, close: 0.66, chgPct: 3.1 },
+      { date: '2026-11-11', main: -8.169e7, small: 6e7, mid: 2.169e7, big: -5e7, superBig: -3.169e7, mainPct: -5.3, close: 0.71, chgPct: 7.04 },
+    ],
+  };
+  const fs = summarizeFundFlow(flow);
+  check('资金流摘要 bars/最近一天', fs && fs.bars === 4 && fs.last.main === -8.169e7, fs && fs.bars);
+  check('3日/5日累计（不足窗口按已有算）',
+    Math.abs(fs.sum3 - (-2e7 + 8e6 - 8.169e7)) < 1 && Math.abs(fs.sum5 - (-5e7 - 2e7 + 8e6 - 8.169e7)) < 1,
+    `${fs.sum3}/${fs.sum5}`);
+  check('连续净流出天数', fs.streak === 1, fs.streak);
+  check('最近5日原始行', fs.recent.length === 4 && fs.recent[3].date === '2026-11-11', fs.recent.length);
+  check('空数据返回 null', summarizeFundFlow({ days: [] }) === null && summarizeFundFlow(null) === null, null);
+
+  const holdings = summarizeHoldings({
+    asOf: '2026-09-30',
+    rows: [
+      { code: '300502', name: '新易盛', weight: 9.23, chgPct: 5.2, mainToday: 3e7, main5: 8e7 },
+      { code: '300308', name: '中际旭创', weight: 8.58, chgPct: 4.2, mainToday: -1e7, main5: 2e7 },
+      { code: '002475', name: '立讯精密', weight: 5.1, chgPct: -1.1, mainToday: null, main5: null },
+    ],
+  });
+  check('成分股权重合计/加权涨跌', Math.abs(holdings.totalWeight - 22.91) < 1e-9
+    && Math.abs(holdings.weightedChg - (9.23 * 5.2 + 8.58 * 4.2 + 5.1 * -1.1) / 22.91) < 1e-9,
+    `${holdings.totalWeight}/${holdings.weightedChg}`);
+  check('成分股资金合计与涨跌家数', holdings.flowToday === 2e7 && holdings.flow5 === 1e8
+    && holdings.up === 2 && holdings.down === 1,
+    `${holdings.flowToday}/${holdings.flow5}/${holdings.up}/${holdings.down}`);
+
+  const pack = buildDataPack({
+    symbol: 'sh515050', name: '通信ETF华夏', code: '515050',
+    quote: { price: 0.71, changePct: 7.04, provider: 'eastmoney' },
+    flowSummary: fs,
+    holdingsSummary: holdings,
+    asOf: new Date('2026-11-11T06:17:00Z'),
+  });
+  check('数据包含【资金流向（多日）】', pack.text.includes('【资金流向（多日'), pack.text.slice(0, 80));
+  check('资金流带多日累计与连续天数', pack.text.includes('/ 5日 -') && pack.text.includes('/ 20日 -'), '累计');
+  check('资金流注明二级市场口径', pack.text.includes('份额申赎是另一套账'), null);
+  check('数据包含【ETF/基金持仓成分股】', pack.text.includes('【ETF/基金持仓成分股】'), null);
+  check('成分股带权重/涨跌/资金', pack.text.includes('新易盛(300502)') && pack.text.includes('权重9.23%')
+    && pack.text.includes('5日主力'), null);
+  check('meta.has 记录资金流/成分股',
+    pack.meta.has.includes('资金流') && pack.meta.has.includes('成分股'), pack.meta.has.join(','));
+  const desc = describePack(pack.meta);
+  check('describePack 显示多日资金流/持仓成分股',
+    desc.includes('多日资金流') && desc.includes('持仓成分股'), desc);
+  check('prompt 里要求结合多日资金与成分股',
+    SYSTEM_PROMPT.includes('3/5/10/20 日累计') && SYSTEM_PROMPT.includes('ETF/基金持仓成分股'), null);
 }
 
 console.log(`\n==== 通过 ${pass} / 失败 ${fail} ====`);

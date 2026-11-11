@@ -782,10 +782,21 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     '2026-10-16 09:32,1501,1503,1505,1500,120,180240,1501.2',
     '2026-10-16 09:33,1503,1502,1506,1501,90,135180,1501.8',
   ];
+  const flowRows = [
+    '2026-10-14,-3000000,2000000,1000000,-1000000,-2000000,-0.9,0.6,0.3,-0.3,-0.6,1490,1.1',
+    '2026-10-15,-2000000,1500000,500000,-800000,-1200000,-0.6,0.4,0.2,-0.2,-0.4,1495,0.4',
+    '2026-10-16,-5000000,3000000,2000000,-2000000,-3000000,-1.2,0.7,0.5,-0.5,-0.7,1500,0.3',
+  ];
   globalThis.fetch = async (url) => {
     const u = String(url);
     if (u.includes('/api/qt/stock/kline/get')) {
       return stub({ data: { name: '贵州茅台', klines: klineRows } });
+    }
+    if (u.includes('/fflow/daykline/get')) {
+      return stub({ data: { name: '贵州茅台', klines: flowRows } });
+    }
+    if (u.includes('FundArchivesDatas')) {
+      return { ok: false, status: 404, statusText: 'Not Found', text: async () => '' };
     }
     if (u.includes('/api/qt/ulist.np/get')) {
       return stub({
@@ -880,6 +891,12 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
   globalThis.fetch = async (url) => {
     const u = String(url);
     if (u.includes('/api/qt/stock/kline/get')) return stub({ data: { name: '贵州茅台', klines: rows } });
+    if (u.includes('/fflow/daykline/get')) {
+      return stub({ data: { name: '贵州茅台', klines: ['2026-10-16,-5000000,3000000,2000000,-2000000,-3000000,-1.2,0.7,0.5,-0.5,-0.7,1680.5,0.9'] } });
+    }
+    if (u.includes('FundArchivesDatas')) {
+      return { ok: false, status: 404, statusText: 'Not Found', text: async () => '' };
+    }
     if (u.includes('/api/qt/ulist.np/get')) {
       return stub({
         data: {
@@ -926,7 +943,7 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('meta 标出 3日K', r.lines[0].meta.has.includes('3日K指标'), r.lines[0].meta.has);
 
     check('done 带回结构化计划', done.plan && done.plan.stance === '偏多' && done.plan.levels.length === 2, done.plan);
-    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v2', done.promptVersion);
+    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v3', done.promptVersion);
     check('关键价位自动转成两条预警', done.alerts === 2 && Array.isArray(done.alertIds) && done.alertIds.length === 2, done.alerts);
 
     const st = await call(ctx, '/state');
@@ -938,7 +955,7 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('预警备注标明来自 AI', aiAlerts.every((a) => /^AI /.test(a.note || '')), aiAlerts.map((a) => a.note));
 
     const one = await call(ctx, `/ai/history/get?id=${done.recordId}`);
-    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v2', one.json.item.promptVersion);
+    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v3', one.json.item.promptVersion);
     check('历史里存了结构化计划', one.json.item.plan && one.json.item.plan.stance === '偏多', one.json.item.plan);
     check('历史里存了数据快照', typeof one.json.item.pack === 'string' && one.json.item.pack.includes('【3日K指标】'),
       one.json.item.pack ? one.json.item.pack.length : one.json.item.pack);
@@ -947,6 +964,87 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('历史摘要带倾向/置信度/预警数',
       list.json.items[0].stance === '偏多' && list.json.items[0].confidence === 66 && list.json.items[0].alertCount === 2,
       list.json.items[0]);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+section('AI 分析：ETF 多日资金流 + 持仓成分股（本地打桩）');
+{
+  const realFetch = globalThis.fetch;
+  const symbol = 'sh515050';
+  const stub = (payload) => ({ ok: true, status: 200, text: async () => JSON.stringify(payload) });
+  const klineRows = [
+    '2026-10-16,0.700,0.710,0.712,0.698,900000,63000000,1.2,1.43,0.01,1.2',
+    '2026-10-15,0.690,0.700,0.702,0.688,800000,55000000,1.1,1.02,0.007,1.0',
+    '2026-10-14,0.680,0.690,0.695,0.678,700000,48000000,1.0,0.58,0.004,0.6',
+  ];
+  const flowRows = [
+    '2026-10-16,-3000000,2000000,1000000,-1000000,-2000000,-0.9,0.6,0.3,-0.3,-0.6,0.710,1.43',
+    '2026-10-15,-2000000,1500000,500000,-800000,-1200000,-0.6,0.4,0.2,-0.2,-0.4,0.700,1.02',
+    '2026-10-14,1000000,-500000,-500000,600000,400000,0.3,-0.1,-0.1,0.2,0.1,0.690,0.58',
+  ];
+  const holdingRows = [
+    "<tr><td>1</td><td><a href='//quote.eastmoney.com/unify/r/1.300502'>300502</a></td>"
+      + "<td class='tol'><a href='//quote.eastmoney.com/unify/r/1.300502'>新易盛</a></td>"
+      + "<td class='tor'></td><td class='tor'></td><td class='xglj'></td>"
+      + "<td class='tor'>9.23%</td><td class='tor'>403.74</td><td class='tor'>157,054.35</td></tr>",
+    "<tr><td>2</td><td><a href='//quote.eastmoney.com/unify/r/0.300308'>300308</a></td>"
+      + "<td class='tol'><a href='//quote.eastmoney.com/unify/r/0.300308'>中际旭创</a></td>"
+      + "<td class='tor'></td><td class='tor'></td><td class='xglj'></td>"
+      + "<td class='tor'>8.11%</td><td class='tor'>1000.00</td><td class='tor'>80,000.00</td></tr>",
+  ].join('');
+  const holdingsHtml = '<html><body><label>截止至：<font class=\'px12\'>2026-09-30</font></label>'
+    + "<h4><a title='通信ETF华夏' href='#'>通信ETF华夏</a></h4>"
+    + "<div id='gpdmList'>1.300502,0.300308</div>"
+    + `<table><tbody>${holdingRows}</tbody></table></body></html>`;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/api/qt/stock/kline/get')) return stub({ data: { name: '通信ETF华夏', klines: klineRows } });
+    if (u.includes('/fflow/daykline/get')) {
+      if (u.includes('515050')) return stub({ data: { name: '通信ETF华夏', klines: flowRows } });
+      return stub({ data: { name: '成分股', klines: ['2026-10-16,-1000000,500000,300000,-400000,-600000,-0.4,0.2,0.1,-0.2,-0.3,100,1.2'] } });
+    }
+    if (u.includes('FundArchivesDatas')) return { ok: true, status: 200, text: async () => holdingsHtml };
+    if (u.includes('/api/qt/ulist.np/get')) {
+      return stub({
+        data: {
+          diff: [
+            { f12: '515050', f13: 1, f14: '通信ETF华夏', f2: 0.71, f18: 0.70, f3: 1.43, f4: 0.01, f5: 900000, f6: 63000000, f8: 1.5, f15: 0.712, f16: 0.698, f17: 0.700, f9: 22.1, f23: 1.9 },
+            { f12: '300502', f13: 1, f14: '新易盛', f2: 100, f18: 98, f3: 2.04, f4: 2, f5: 10000, f6: 1000000, f8: 1.1, f15: 101, f16: 97, f17: 98, f9: 30, f23: 5 },
+            { f12: '300308', f13: 0, f14: '中际旭创', f2: 200, f18: 202, f3: -0.99, f4: -2, f5: 20000, f6: 4000000, f8: 0.8, f15: 203, f16: 199, f17: 202, f9: 25, f23: 4 },
+          ],
+        },
+      });
+    }
+    return realFetch(url);
+  };
+  try {
+    ctx.llm = makeFakeLlm({
+      chunks: [
+        { type: 'block-start', index: 0, blockType: 'text' },
+        { type: 'text-delta', index: 0, text: 'ETF 资金面看看成分股。' },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ],
+    });
+    const r = await call(ctx, '/ai/analyze', {
+      method: 'POST',
+      body: { symbol, periods: ['day'], include: { book: false, trend: false, indexes: false } },
+    });
+    const done = r.lines[r.lines.length - 1];
+    check('ETF 请求成功', done.type === 'done' && done.finish === 'stop', done);
+    const sent = ctx.llm.calls[ctx.llm.calls.length - 1];
+    const userText = sent.messages[1].content[0].text;
+    check('多日资金流进包', userText.includes('【资金流向（多日') && userText.includes('累计主力：3日'), null);
+    check('资金流有连续天数', /连续/.test(userText), null);
+    check('ETF 成分股段进包', userText.includes('【ETF/基金持仓成分股】'), null);
+    check('成分股带名称与权重', userText.includes('新易盛') && userText.includes('9.23%'), null);
+    check('成分股带涨跌与资金列', userText.includes('中际旭创') && /今日主力|5日主力/.test(userText), null);
+    check('meta 标出资金流与成分股',
+      r.lines[0].meta.has.includes('资金流') && r.lines[0].meta.has.includes('成分股'), r.lines[0].meta.has);
+    const one = await call(ctx, `/ai/history/get?id=${done.recordId}`);
+    check('历史快照里有资金流与成分股',
+      one.json.item.pack.includes('【资金流向（多日') && one.json.item.pack.includes('【ETF/基金持仓成分股】'), null);
   } finally {
     globalThis.fetch = realFetch;
   }
