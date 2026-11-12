@@ -1,5 +1,17 @@
 # 更新日志
 
+## 1.5.3 — 2026-11-12
+
+### 修追问从历史记录进入时报 `reading 'replayState'`
+- 现象：打开一条旧的分析记录再追问，或者同一轮对话里接着追问（历史里带 assistant 消息），
+  会报 `Cannot read properties of undefined (reading 'replayState')`。
+- 根因：DSH 的 `llm.stream()` 会把历史里的 assistant 消息当成「模型产物」去还原，
+  内部直接读 `message.source.replayState`；宿主给的历史消息只有 `role/content`、没有 `source`，
+  于是 `source` 为 undefined 时就抛了这个 TypeError。第一轮追问能成功，是因为那一次历史是空的。
+- 修法：`/ai/chat` 给每条 assistant 历史补 `source: { kind: 'model', provider, model }`。
+  没有 `replayState` 时 DSH 会走 provider-neutral 降级，不会把上一轮的私有状态硬塞进新请求。
+- 自检：verify.mjs 315 条（新增「assistant 历史必须带 source」「content 必须是文本块数组」两条断言）。
+
 ## 1.5.2 — 2026-11-12
 
 ### 修追问面板的闪烁

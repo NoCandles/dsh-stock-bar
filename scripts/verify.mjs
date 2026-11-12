@@ -878,6 +878,14 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     const chatUser = sentChat.messages[sentChat.messages.length - 1].content[0].text;
     check('追问只喂引用段+问题', chatUser.includes('主力净流出') && chatUser.includes('为什么还涨？'), null);
     check('追问带上了这次分析的数据包', chatUser.includes('【标的】') || chatUser.includes('贵州茅台'), null);
+    const chatAssistant = sentChat.messages.find((m) => m.role === 'assistant');
+    check('历史 assistant 消息补 source（否则 DSH 读 replayState 会崩）',
+      !!chatAssistant && !!chatAssistant.source && chatAssistant.source.kind === 'model'
+      && typeof chatAssistant.source.provider === 'string' && typeof chatAssistant.source.model === 'string',
+      chatAssistant && chatAssistant.source);
+    check('追问消息 content 都是文本块数组',
+      sentChat.messages.every((m) => Array.isArray(m.content) && m.content.length > 0 && m.content[0].type === 'text'),
+      sentChat.messages.map((m) => [m.role, Array.isArray(m.content)]));
     const withChats = await call(ctx, `/ai/history/get?id=${h0.id}`);
     check('追问随历史保存为一问一答',
       Array.isArray(withChats.json.item.chats) && withChats.json.item.chats.length === 2
