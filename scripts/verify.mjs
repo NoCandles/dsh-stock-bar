@@ -206,7 +206,9 @@ for (const p of ROUTE_LIST) {
 }
 check('全部为 exact 路由', [...ctx.routes.values()].every((r) => r.kind === 'exact'));
 check('每条路由都有 handler', [...ctx.routes.values()].every((r) => typeof r.handler === 'function'));
-check('ctx.effect 被用于注册（可随插件 fiber 卸载）', ctx.effects.length === ROUTE_LIST.length, ctx.effects.map((e) => e.label));
+check('ctx.effect 被用于注册（可随插件 fiber 卸载）', ctx.effects.length === ROUTE_LIST.length + 1, ctx.effects.map((e) => e.label));
+check('自动跟踪的定时器挂在 ctx.effect 上（卸载会被清掉）',
+  ctx.effects.some((e) => /auto|autoTrack|setInterval/i.test(String(e.label || ''))), ctx.effects.map((e) => e.label));
 
 section('交易时段判断');
 const ms = marketStatus();
@@ -263,6 +265,16 @@ section('POST /settings/save');
   check('refreshMs 被钳到下限 1000', r2.json.settings.refreshMs === 1000, r2.json.settings.refreshMs);
   const r3 = await call(ctx, '/settings/save', { method: 'POST', body: { 未知字段: 1, period: 'week' } });
   check('未知字段被忽略且不报错', r3.json.ok === true && r3.json.settings.period === 'week');
+  const r4 = await call(ctx, '/settings/save', {
+    method: 'POST',
+    body: { autoTrackTimes: '9:00, 10:30，25:00,13:35' },
+  });
+  check('自动跟踪时间点被清洗并排序', r4.json.settings.autoTrackTimes === '10:30,13:35',
+    r4.json.settings.autoTrackTimes);
+  check('自动跟踪默认开启', r4.json.settings.autoTrackEnabled === true, r4.json.settings.autoTrackEnabled);
+  const r5 = await call(ctx, '/settings/save', { method: 'POST', body: { autoTrackTimes: 'abc' } });
+  check('时间点全非法时回落到默认值', r5.json.settings.autoTrackTimes === '09:35,10:30,11:30,13:35,14:30,15:05',
+    r5.json.settings.autoTrackTimes);
   await call(ctx, '/settings/save', { method: 'POST', body: { refreshMs: 5000, scroll: true } });
 }
 

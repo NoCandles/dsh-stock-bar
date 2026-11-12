@@ -95,6 +95,7 @@ const STATE = {
     showWatch: true, showHoldings: true, showIndex: true, showTotals: true,
     showTrend: true, showKline: true, showTrades: true, showAlerts: true, showAi: true,
     aiStyle: 'short', aiKline: true, aiTrend: true, aiBook: true, aiTrades: true, aiIndex: true,
+    autoTrackEnabled: true, autoTrackTimes: '09:35,10:30,11:30,13:35,14:30,15:05',
   },
   alerts: [
     {
@@ -1351,6 +1352,15 @@ section('旧宿主不认新设置项时的提示');
   }
   check('打开设置页', clickText('设置'));
   await settle(10);
+  check('设置页有 AI 自动跟踪开关与时间点', allText(tree).includes('AI 自动跟踪')
+    && allText(tree).includes('跟踪时间点') && allText(tree).includes('15:05'), null);
+  check('自动跟踪默认已开启', STATE.settings.autoTrackEnabled !== false, STATE.settings.autoTrackEnabled);
+  check('点一下自动跟踪开关', toggleRow('AI 自动跟踪'));
+  await settle(12);
+  check('自动跟踪开关写回设置', STATE.settings.autoTrackEnabled === false, STATE.settings.autoTrackEnabled);
+  check('再点回来', toggleRow('AI 自动跟踪'));
+  await settle(12);
+  check('自动跟踪开关恢复', STATE.settings.autoTrackEnabled === true, STATE.settings.autoTrackEnabled);
   const before = STATE.settings.showKline;
   DROP_UNKNOWN_SETTINGS = true; // 宿主装的是旧版本，showKline 这个键它不认识
   check('点一下「K线图」的开关', toggleRow('K线图'));

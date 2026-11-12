@@ -12,7 +12,7 @@ import {
   sma, stdev, changePctOf,
   summarizeCandles, condenseCandles, summarizeTrends, summarizeBook,
   summarizeTrades, summarizeFundFlow, summarizeHoldings, summarizeShares, buildDataPack, buildMessages, describePack,
-  aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION, SYSTEM_PROMPT,
+  aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION, SYSTEM_PROMPT, parseAutoTimes,
   DEFAULT_KLINE_BARS,
 } from '../lib/analysis.js';
 
@@ -449,6 +449,19 @@ section('结构化计划解析（parsePlan / stripPlan）');
     asOf: new Date('2026-11-11T06:17:00Z'),
   });
   check('只有一天快照时给出开始记录提示', oneDayPack.text.includes('开始记录'), null);
+}
+
+// ---------------------------------------------------------------------------
+// 自动跟踪时间点
+// ---------------------------------------------------------------------------
+{
+  console.log('\n-- 自动跟踪时间点 --');
+  check('解析并排序时间点', parseAutoTimes('15:05, 09:35，10:30').join(',') === '09:35,10:30,15:05',
+    parseAutoTimes('15:05, 09:35，10:30'));
+  check('传数组也认', parseAutoTimes(['09:35', '09:35', '1:5']).join(',') === '09:35',
+    parseAutoTimes(['09:35', '09:35', '1:5']));
+  check('非法项丢弃、空输入返回空', parseAutoTimes('25:00,abc,12:70').length === 0
+    && parseAutoTimes('').length === 0 && parseAutoTimes(null).length === 0, null);
 }
 
 console.log(`\n==== 通过 ${pass} / 失败 ${fail} ====`);

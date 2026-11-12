@@ -55,20 +55,20 @@ POST /api/stock-bar/ai/chat          就某次分析/某段正文追问，NDJSON
 
 ## 开发与自检
 
-四个脚本，共 **986 条断言**，全部不需要 DSH 在跑：
+四个脚本，共 **999 条断言**，全部不需要 DSH 在跑：
 
 ```powershell
 # 1) 宿主侧：路由注册、存储、盈亏/流水/预警算法、缓存 LRU、AI 数据包与流、多周期聚合、自动设预警、追问、错误兜底（假 ctx，进程内）
-node scripts/verify.mjs            # 321 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
+node scripts/verify.mjs            # 325 条（其中 2 条依赖东方财富实时分时源，源挂时会失败）
 
 # 2) 客户端：模块包装契约、槽位注册、真实渲染、canvas 绘制、成本线、涨跌停标记、AI 面板流式解析、计划卡片、追问面板、组件开关联动、卸载清理
-node scripts/verify-client.mjs     # 339 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照/追问/追问入口与比例）
+node scripts/verify-client.mjs     # 345 条（含侧边栏接线与渲染、AI 历史/周期选择/折叠/切标的重置/数据快照/追问/追问入口与比例/自动跟踪设置）
 
 # 3) 真 HTTP 端到端：把 apply() 挂到一个真的 node:http 服务器上再打进去
 node scripts/verify-live.mjs       # 178 条（其中 1 条依赖实时分时源）
 
 # 4) AI 数据包（不需要网络与模型）：指标计算、消息组装、简版/详细两种口径
-node scripts/verify-analysis.mjs   # 148 条
+node scripts/verify-analysis.mjs   # 151 条
 ```
 
 再加三个探针：
@@ -174,6 +174,11 @@ node scripts/peek-pack.mjs sh600519 short
     system 明确要求「数据包里没有就说没有」。追问必须挂在 `recordId` 上（分析没落库/没跑完时界面禁用），
     成功后由 `appendChat()` 写进 `analyses[i].chats`（一问一答，最多 20 条、单条正文 4000 字），
     历史回看时连对话一起带出来；原复盘正文不会被改写。`done` 事件带 `analysisId` / `text` / `saved`。
+  - **自动跟踪**（`settings.autoTrackEnabled`，默认开；`autoTrackTimes` 默认
+    `09:35,10:30,11:30,13:35,14:30,15:05`）：宿主每 20 秒对一次表，命中时间点（容差 3 分钟、同一时刻只跑一次）
+    就对**持仓**（`shares>0`、非指数）逐只跑自动分析，`15:05` 是完整复盘（多周期 + 资金/成分股/份额，更新预警），
+    其余时间点是盘中简报（日K + 分时 + 资金，不重设预警）；记录 `kind:'auto'`、`trigger` 为该时间点，
+    历史列表带「自动 15:05」小标记。定时器挂在 `ctx.effect` 上，插件卸载/重载自动清掉；周末休市跳过。
   - `style: short` 限字数、`style: detail` 放开；`extra` 会把用户的额外要求拼进去。
   - 流式事件：`meta`（数据包统计 + 已喂数据来源）→ `reasoning`（思考过程，界面折叠显示）→
     `delta`（正文增量）→ `done`（完整正文 + token 用量 + 耗时 + finish）。客户端跨 chunk 拼行，
