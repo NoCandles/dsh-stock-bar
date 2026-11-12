@@ -1742,6 +1742,31 @@ section('AI 分析');
     !!modelSel() && modelSel().props.value === 'deepseek-reasoner'
     && !!provSel() && provSel().props.value === 'deep',
     modelSel() && modelSel().props.value);
+
+  // —— 自动跟踪跑完后右下角弹通知 ——
+  AI_HISTORY.unshift({
+    id: 'auto-notice-1', at: Date.now(), symbol: MAOTAI, code: '600519', name: '贵州茅台',
+    provider: 'deep', model: 'deepseek-reasoner', style: 'short',
+    periods: [{ period: 'day', label: '日K' }], trendDays: 1, chars: 900,
+    has: ['日K指标', '资金流'], snippet: '11:30 简报：量能温和，仍在 20 日线上方',
+    text: '11:30 简报：量能温和，仍在 20 日线上方。', kind: 'auto', trigger: '11:30',
+    plan: null, alerts: [], chats: [],
+  });
+  const pokeOnce = () => { for (const it of [...intervals.values()]) it.fn(); };
+  pokeOnce();
+  await settle(20);
+  check('自动分析完成后右下角弹通知', findByClass(tree, 'dst-notice').length === 1,
+    findByClass(tree, 'dst-notice').length);
+  const noticeText = allText(tree);
+  check('通知里说明触发时间与标的', /自动跟踪 · 11:30/.test(noticeText) && /贵州茅台/.test(noticeText), null);
+  check('通知里带一句简报摘要', /量能温和，仍在 20 日线上方/.test(noticeText), null);
+  const noticeNode = findByClass(tree, 'dst-notice')[0];
+  noticeNode.props.onClick();
+  await settle(24);
+  check('点通知后打开 AI 分析并回显正文', /量能温和，仍在 20 日线上方。/.test(allText(tree)), null);
+  check('点开后通知消失', findByClass(tree, 'dst-notice').length === 0,
+    findByClass(tree, 'dst-notice').length);
+  AI_HISTORY.shift();
 }
 
 section('组件开关（设置 → 显示）');
