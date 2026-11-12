@@ -11,7 +11,7 @@
 import {
   sma, stdev, changePctOf,
   summarizeCandles, condenseCandles, summarizeTrends, summarizeBook,
-  summarizeTrades, summarizeFundFlow, summarizeHoldings, buildDataPack, buildMessages, describePack,
+  summarizeTrades, summarizeFundFlow, summarizeHoldings, summarizeShares, buildDataPack, buildMessages, describePack,
   aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION, SYSTEM_PROMPT,
   DEFAULT_KLINE_BARS,
 } from '../lib/analysis.js';
@@ -339,7 +339,7 @@ section('结构化计划解析（parsePlan / stripPlan）');
   check('stripPlan 去掉了 json 块', !stripPlan(text).includes('```') && stripPlan(text).includes('偏多'), stripPlan(text));
   check('没有 JSON 时返回 null', parsePlan('只看量能，没有结论块。') === null, null);
   check('坏 JSON 返回 null', parsePlan('```json\n{not json}\n```') === null, null);
-  check('PROMPT_VERSION 升到 v3', PROMPT_VERSION === 'stock-analysis-v3', PROMPT_VERSION);
+  check('PROMPT_VERSION 升到 v4', PROMPT_VERSION === 'stock-analysis-v4', PROMPT_VERSION);
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +400,55 @@ section('结构化计划解析（parsePlan / stripPlan）');
     desc.includes('多日资金流') && desc.includes('持仓成分股'), desc);
   check('prompt 里要求结合多日资金与成分股',
     SYSTEM_PROMPT.includes('3/5/10/20 日累计') && SYSTEM_PROMPT.includes('ETF/基金持仓成分股'), null);
+}
+
+// ---------------------------------------------------------------------------
+// 一级市场份额申赎
+// ---------------------------------------------------------------------------
+{
+  console.log('\n-- 一级市场份额申赎 --');
+  const changes = [
+    { date: '2026-09-30', subscribe: 137.0, redeem: 139.58, shares: 176.57, netAssets: 170.24, changePct: -31.88 },
+    { date: '2026-06-30', subscribe: 130.04, redeem: 58.0, shares: 179.15, netAssets: 249.91, changePct: 220.3 },
+  ];
+  const snapshots = [
+    { date: '2026-11-03', shares: 176e8 },
+    { date: '2026-11-04', shares: 175.2e8 },
+    { date: '2026-11-05', shares: 174.6e8 },
+    { date: '2026-11-06', shares: 174.1e8 },
+    { date: '2026-11-11', shares: 173.5e8 },
+  ];
+  const sh = summarizeShares({ changes, snapshots, price: 0.71 });
+  check('份额摘要取最近报告期', sh && sh.latest.date === '2026-09-30', sh && sh.latest.date);
+  check('净申赎 = 申购 - 赎回', Math.abs(sh.netSubscribe - (137.0 - 139.58)) < 1e-9, sh.netSubscribe);
+  check('快照变化按 3 日窗口算', sh.deltas.length === 1 && sh.deltas[0].days === 3, JSON.stringify(sh.deltas));
+  check('份额变化折算成资金', Math.abs(sh.deltas[0].money - ((173.5e8 - 175.2e8) / 1e8) * 0.71) < 1e-9,
+    sh.deltas[0].money);
+  check('没有快照时不报错', summarizeShares({ changes }) && summarizeShares({ changes }).deltas.length === 0, null);
+  check('只有一天快照时标记不足以看变化',
+    summarizeShares({ changes, snapshots: [{ date: '2026-11-11', shares: 1e8 }] }).hasSnapshot === false, null);
+  check('完全没有数据返回 null', summarizeShares({ changes: [], snapshots: [] }) === null, null);
+
+  const pack = buildDataPack({
+    symbol: 'sh515050', name: '通信ETF华夏', code: '515050',
+    quote: { price: 0.71, changePct: 7.04, provider: 'eastmoney' },
+    shareSummary: sh,
+    asOf: new Date('2026-11-11T06:17:00Z'),
+  });
+  check('数据包含【一级市场：份额申赎（ETF）】', pack.text.includes('【一级市场：份额申赎（ETF）】'), null);
+  check('份额段带申购/赎回/净申赎/期末份额',
+    pack.text.includes('申购 137.00 亿份') && pack.text.includes('赎回 139.58 亿份')
+      && pack.text.includes('净申赎 -2.58 亿份') && pack.text.includes('期末份额 176.57 亿份'), null);
+  check('份额段带快照变化', pack.text.includes('近3日') && pack.text.includes('亿份'), null);
+  check('meta.has 记录份额申赎', pack.meta.has.includes('份额申赎'), pack.meta.has.join(','));
+  check('describePack 显示一级份额申赎', describePack(pack.meta).includes('一级份额申赎'), describePack(pack.meta));
+
+  const oneDayPack = buildDataPack({
+    symbol: 'sh515050', name: '通信ETF华夏', code: '515050',
+    shareSummary: summarizeShares({ changes, snapshots: [{ date: '2026-11-11', shares: 173.5e8 }] }),
+    asOf: new Date('2026-11-11T06:17:00Z'),
+  });
+  check('只有一天快照时给出开始记录提示', oneDayPack.text.includes('开始记录'), null);
 }
 
 console.log(`\n==== 通过 ${pass} / 失败 ${fail} ====`);

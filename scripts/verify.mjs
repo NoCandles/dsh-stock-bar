@@ -878,6 +878,8 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     const chatUser = sentChat.messages[sentChat.messages.length - 1].content[0].text;
     check('追问只喂引用段+问题', chatUser.includes('主力净流出') && chatUser.includes('为什么还涨？'), null);
     check('追问带上了这次分析的数据包', chatUser.includes('【标的】') || chatUser.includes('贵州茅台'), null);
+    check('追问带上提问时实时行情', chatUser.includes('【提问时的实时行情】') && chatUser.includes('现价 1680.5'),
+      (chatUser.match(/【提问时的实时行情】[^\n]*/) || [])[0]);
     const chatAssistant = sentChat.messages.find((m) => m.role === 'assistant');
     check('历史 assistant 消息补 source（否则 DSH 读 replayState 会崩）',
       !!chatAssistant && !!chatAssistant.source && chatAssistant.source.kind === 'model'
@@ -988,7 +990,7 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('meta 标出 3日K', r.lines[0].meta.has.includes('3日K指标'), r.lines[0].meta.has);
 
     check('done 带回结构化计划', done.plan && done.plan.stance === '偏多' && done.plan.levels.length === 2, done.plan);
-    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v3', done.promptVersion);
+    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v4', done.promptVersion);
     check('关键价位自动转成两条预警', done.alerts === 2 && Array.isArray(done.alertIds) && done.alertIds.length === 2, done.alerts);
 
     const st = await call(ctx, '/state');
@@ -1000,7 +1002,7 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('预警备注标明来自 AI', aiAlerts.every((a) => /^AI /.test(a.note || '')), aiAlerts.map((a) => a.note));
 
     const one = await call(ctx, `/ai/history/get?id=${done.recordId}`);
-    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v3', one.json.item.promptVersion);
+    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v4', one.json.item.promptVersion);
     check('历史里存了结构化计划', one.json.item.plan && one.json.item.plan.stance === '偏多', one.json.item.plan);
     check('历史里存了数据快照', typeof one.json.item.pack === 'string' && one.json.item.pack.includes('【3日K指标】'),
       one.json.item.pack ? one.json.item.pack.length : one.json.item.pack);
@@ -1043,6 +1045,10 @@ section('AI 分析：ETF 多日资金流 + 持仓成分股（本地打桩）');
     + "<h4><a title='通信ETF华夏' href='#'>通信ETF华夏</a></h4>"
     + "<div id='gpdmList'>1.300502,0.300308</div>"
     + `<table><tbody>${holdingRows}</tbody></table></body></html>`;
+  const sharesHtml = "<html><body><table><tbody>"
+    + '<tr><td>2026-09-30</td><td>137.00</td><td>139.58</td><td>176.57</td><td>170.24</td><td>-31.88%</td></tr>'
+    + '<tr><td>2026-06-30</td><td>130.04</td><td>58.00</td><td>179.15</td><td>249.91</td><td>220.30%</td></tr>'
+    + '</tbody></table></body></html>';
   globalThis.fetch = async (url) => {
     const u = String(url);
     if (u.includes('/api/qt/stock/kline/get')) return stub({ data: { name: '通信ETF华夏', klines: klineRows } });
@@ -1050,7 +1056,11 @@ section('AI 分析：ETF 多日资金流 + 持仓成分股（本地打桩）');
       if (u.includes('515050')) return stub({ data: { name: '通信ETF华夏', klines: flowRows } });
       return stub({ data: { name: '成分股', klines: ['2026-10-16,-1000000,500000,300000,-400000,-600000,-0.4,0.2,0.1,-0.2,-0.3,100,1.2'] } });
     }
+    if (u.includes('type=gmbd')) return { ok: true, status: 200, text: async () => sharesHtml };
     if (u.includes('FundArchivesDatas')) return { ok: true, status: 200, text: async () => holdingsHtml };
+    if (u.includes('/api/qt/stock/get')) {
+      return stub({ data: { f43: 710, f57: '515050', f58: '通信ETF华夏', f84: 17411205376 } });
+    }
     if (u.includes('/api/qt/ulist.np/get')) {
       return stub({
         data: {
@@ -1087,9 +1097,17 @@ section('AI 分析：ETF 多日资金流 + 持仓成分股（本地打桩）');
     check('成分股带涨跌与资金列', userText.includes('中际旭创') && /今日主力|5日主力/.test(userText), null);
     check('meta 标出资金流与成分股',
       r.lines[0].meta.has.includes('资金流') && r.lines[0].meta.has.includes('成分股'), r.lines[0].meta.has);
+    check('ETF 份额申赎段进包', userText.includes('【一级市场：份额申赎（ETF）】'), null);
+    check('份额段带申购/赎回/净申赎', userText.includes('申购 137.00 亿份')
+      && userText.includes('赎回 139.58 亿份') && userText.includes('净申赎 -2.58 亿份'), null);
+    check('meta 标出份额申赎', r.lines[0].meta.has.includes('份额申赎'), r.lines[0].meta.has);
+    const diskShares = (JSON.parse(fs.readFileSync(storePath, 'utf8')).shareSnapshots || {})['515050'];
+    check('当日份额快照已落盘', Array.isArray(diskShares) && diskShares.length === 1
+      && diskShares[0].shares === 17411205376, diskShares);
     const one = await call(ctx, `/ai/history/get?id=${done.recordId}`);
     check('历史快照里有资金流与成分股',
       one.json.item.pack.includes('【资金流向（多日') && one.json.item.pack.includes('【ETF/基金持仓成分股】'), null);
+    check('历史快照里有份额申赎段', one.json.item.pack.includes('【一级市场：份额申赎（ETF）】'), null);
   } finally {
     globalThis.fetch = realFetch;
   }

@@ -1,11 +1,11 @@
-{
+﻿{
   "name": "dsh-stock-bar",
-  "version": "1.5.3",
+  "version": "1.6.0",
   "type": "module",
-  "description": "顶部状态栏实时股票行情条：自选股、持仓成本、盈亏、K线图 · Always-on stock quotes strip at the top of the DSH window.",
+  "description": "椤堕儴鐘舵€佹爮瀹炴椂鑲＄エ琛屾儏鏉★細鑷€夎偂銆佹寔浠撴垚鏈€佺泩浜忋€並绾垮浘 路 Always-on stock quotes strip at the top of the DSH window.",
   "meta": {
-    "title": "顶部股票行情条",
-    "description": "在窗口顶部常驻的实时行情条：自选股涨跌、持仓股数与成本价、当日与总盈亏、K线图。"
+    "title": "椤堕儴鑲＄エ琛屾儏鏉?,
+    "description": "鍦ㄧ獥鍙ｉ《閮ㄥ父椹荤殑瀹炴椂琛屾儏鏉★細鑷€夎偂娑ㄨ穼銆佹寔浠撹偂鏁颁笌鎴愭湰浠枫€佸綋鏃ヤ笌鎬荤泩浜忋€並绾垮浘銆?
   },
   "keywords": [
     "dsh",

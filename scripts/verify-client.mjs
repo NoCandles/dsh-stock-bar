@@ -1516,8 +1516,8 @@ section('AI 分析');
     ['日K', '分时', '盘口', '流水', '大盘'].every((l) => allText(tree).includes(l)), null);
   check('数据窗口还有 3日K/5日K/周K/月K 可选',
     ['3日K', '5日K', '周K', '月K'].every((l) => allText(tree).includes(l)), null);
-  check('数据窗口有资金流/成分股勾选',
-    ['资金流', '成分股'].every((l) => allText(tree).includes(l)), null);
+  check('数据窗口有资金流/成分股/份额勾选',
+    ['资金流', '成分股', '份额'].every((l) => allText(tree).includes(l)), null);
   check('额外要求输入框存在',
     collect(tree).some((n) => n.tag === 'input' && /额外要求/.test(String(n.props.placeholder || ''))), null);
   check('未开始时有说明文案', /让模型做一次复盘/.test(allText(tree)), null);
@@ -1533,7 +1533,7 @@ section('AI 分析');
     `${req.provider}/${req.model}`);
   check('默认走简版', req.style === 'short', req.style);
   check('请求里带上数据勾选', !!req.include && req.include.kline === true && req.include.indexes === true
-    && req.include.flow === true && req.include.holdings === true,
+    && req.include.flow === true && req.include.holdings === true && req.include.share === true,
     JSON.stringify(req.include));
 
   // —— v2：结构化计划卡片 + 自动设预警说明 ——
