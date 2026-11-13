@@ -1297,7 +1297,22 @@ section('预警弹窗提示');
   STATE.fired = [];
 }
 
-section('宿主未加载时的提示（401 / 断网）');
+section('预警触发带动作建议和量比');
+{
+  STATE.fired = [{
+    id: 'al3', symbol: 'sh515050', code: '515050', name: '通信ETF华夏',
+    kind: 'price', op: '<=', value: 0.68, enabled: true, hit: true, firedAt: 20261113,
+    current: 0.677, volRatio: 1.42, advice: '支撑：放量跌破减半',
+  }];
+  check('点击刷新按钮', clickTitle('立即刷新行情'));
+  await settle(14);
+  const txt = allText(tree);
+  check('提示里有动作建议', /放量跌破减半/.test(txt), txt.slice(0, 120));
+  check('提示里带量比', /量比 1\.42/.test(txt), txt.slice(0, 160));
+  STATE.fired = [];
+  check('点击刷新按钮（清空）', clickTitle('立即刷新行情'));
+  await settle(8);
+}
 {
   // 手动触发一次轮询：把已登记的定时器回调全部跑一遍
   const poke = () => { for (const it of [...intervals.values()]) it.fn(); };
