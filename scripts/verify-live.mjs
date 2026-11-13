@@ -179,13 +179,13 @@ section('路由注册');
     '/api/stock-bar/ai/models', '/api/stock-bar/ai/analyze',
     '/api/stock-bar/ai/history', '/api/stock-bar/ai/history/get',
     '/api/stock-bar/ai/history/remove', '/api/stock-bar/ai/history/clear',
-    '/api/stock-bar/ai/chat',
+    '/api/stock-bar/ai/chat', '/api/stock-bar/ai/verdict',
   ];
-  check('全部 24 条路由都在', routes.size === 24, routes.size);
+  check('全部 25 条路由都在', routes.size === 25, routes.size);
   for (const p of expected) {
     check(`注册了 ${p.replace('/api/stock-bar', '')}`, routes.has(p));
   }
-  check('全部走 ctx.effect 注册（可随插件卸载）', disposers.length === 25, disposers.length);
+  check('全部走 ctx.effect 注册（可随插件卸载）', disposers.length === 26, disposers.length);
   let unknown = null;
   try { unknown = await call('/api/stock-bar/nope'); } catch (e) { unknown = { status: 0, error: e.message }; }
   check('未知路径返回 404', unknown.status === 404, unknown.status);

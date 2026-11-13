@@ -198,7 +198,7 @@ const ROUTE_LIST = [
   '/trades/save', '/trades/remove', '/trades/clear', '/trades/apply',
   '/alerts/save', '/alerts/remove', '/alerts/ack',
   '/ai/models', '/ai/analyze',
-  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear', '/ai/chat',
+  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear', '/ai/chat', '/ai/verdict',
 ];
 check(`注册了 ${ROUTE_LIST.length} 条路由`, ctx.routes.size === ROUTE_LIST.length, [...ctx.routes.keys()]);
 for (const p of ROUTE_LIST) {
@@ -929,6 +929,29 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     const missingChat = await call(ctx, '/ai/chat', { method: 'POST', body: { analysisId: 'nope', question: '问' } });
     check('不存在的分析记录拒绝追问',
       missingChat.json && missingChat.json.ok === false && /不存在/.test(missingChat.json.error), missingChat.json);
+
+    // 条件式裁决：一次性 JSON，供自动执行器做买入门禁
+    ctx.llm = makeFakeLlm({
+      chunks: [
+        { type: 'text-delta', index: 0, text: '{"vote":"allow","urgency":"watch","confidence":70,"conditions":["price>0.001"],"reason":"ok"}' },
+        { type: 'finish', reason: { kind: 'stop' } },
+      ],
+    });
+    const vd = await call(ctx, '/ai/verdict', {
+      method: 'POST',
+      body: { symbol: 'sh600519', side: 'buy', why: 'test', vol5m: 300000, volRatio: 1.5 },
+    });
+    check('裁决接口返回 JSON', vd.json && vd.json.ok === true && vd.json.verdict
+      && vd.json.verdict.vote === 'allow', vd.json);
+    check('裁决带 refPrice 与 snapshotAt',
+      typeof vd.json.refPrice === 'number' && vd.json.refPrice > 0 && vd.json.snapshotAt > 0,
+      vd.json && vd.json.refPrice);
+    check('裁决保留条件数组',
+      Array.isArray(vd.json.verdict.conditions) && vd.json.verdict.conditions[0] === 'price>0.001',
+      vd.json.verdict && vd.json.verdict.conditions);
+    check('裁决带延迟信息', typeof vd.json.latencyMs === 'number', vd.json && vd.json.latencyMs);
+    const vdGet = await call(ctx, '/ai/verdict');
+    check('裁决只接受 POST', vdGet.json && vdGet.json.ok === false, vdGet.json);
 
     // 落盘验证：历史写在同一个 portfolio.json 里
     const onDisk = JSON.parse(fs.readFileSync(storePath, 'utf8'));
