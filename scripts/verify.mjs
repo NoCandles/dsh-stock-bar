@@ -198,7 +198,7 @@ const ROUTE_LIST = [
   '/trades/save', '/trades/remove', '/trades/clear', '/trades/apply',
   '/alerts/save', '/alerts/remove', '/alerts/ack',
   '/ai/models', '/ai/analyze',
-  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear', '/ai/chat', '/ai/verdict',
+  '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear', '/ai/chat', '/ai/verdict', '/ai/plan',
 ];
 check(`注册了 ${ROUTE_LIST.length} 条路由`, ctx.routes.size === ROUTE_LIST.length, [...ctx.routes.keys()]);
 for (const p of ROUTE_LIST) {
