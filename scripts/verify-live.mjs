@@ -181,7 +181,7 @@ section('路由注册');
     '/api/stock-bar/ai/history/remove', '/api/stock-bar/ai/history/clear',
     '/api/stock-bar/ai/chat', '/api/stock-bar/ai/verdict', '/api/stock-bar/ai/plan',
   ];
-  check('全部 25 条路由都在', routes.size === 25, routes.size);
+  check('全部 26 条路由都在', routes.size === 26, routes.size);
   for (const p of expected) {
     check(`注册了 ${p.replace('/api/stock-bar', '')}`, routes.has(p));
   }
