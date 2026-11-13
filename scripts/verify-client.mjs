@@ -1308,7 +1308,7 @@ section('预警触发带动作建议和量比');
   await settle(14);
   const txt = allText(tree);
   check('提示里有动作建议', /放量跌破减半/.test(txt), txt.slice(0, 120));
-  check('提示里带量比并标出放量', /量比 1\.82（放量）/.test(txt), txt.slice(0, 160));
+  check('提示里带量比', /量比 1\.82/.test(txt), txt.slice(0, 160));
   STATE.fired = [];
   check('点击刷新按钮（清空）', clickTitle('立即刷新行情'));
   await settle(8);

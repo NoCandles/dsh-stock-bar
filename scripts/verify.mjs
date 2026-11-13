@@ -318,9 +318,10 @@ section('POST /items/save —— 股数 + 成本价');
   check('成本=1000', r.json.item.cost === 1000);
   check('持仓标记 held', r.json.item.held === true);
   if (price) {
-    check('市值 = 现价 × 100', Math.abs(r.json.item.marketValue - price * 100) < 0.01,
+    // 两次 save 之间行情可能已经跳动，给 2% 容差（茅台单价高，几毛钱就差几十块）
+    check('市值 = 现价 × 100', Math.abs(r.json.item.marketValue - price * 100) / (price * 100) < 0.02,
       { marketValue: r.json.item.marketValue, expected: price * 100 });
-    check('盈亏 = 市值 - 成本100000', Math.abs(r.json.item.pnl - (price * 100 - 100000)) < 0.01,
+    check('盈亏 = 市值 - 成本100000', Math.abs(r.json.item.pnl - (price * 100 - 100000)) / (price * 100) < 0.02,
       { pnl: r.json.item.pnl });
     check('盈亏率符号一致', Math.sign(r.json.item.pnlPct) === Math.sign(r.json.item.pnl),
       { pnl: r.json.item.pnl, pnlPct: r.json.item.pnlPct });
@@ -672,6 +673,24 @@ section('老版本数据文件迁移（升级不能丢持仓）');
   check('空流水也能算已实现盈亏', r && r.realized === 0 && r.tradeCount === 0, { realized: r && r.realized });
   const synced = await s.syncAlerts(new Map());
   check('syncAlerts 在空预警上不炸', synced && Array.isArray(synced.alerts) && synced.alerts.length === 0);
+
+  // 预警防抖：价格在阈值附近来回穿时不能反复触发
+  {
+    const dirH = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-hyst-'));
+    const sH = new PortfolioStore(path.join(dirH, 'portfolio.json'));
+    await sH.load();
+    await sH.upsertAlert({ symbol: 'sh515050', code: '515050', name: '通信ETF华夏', kind: 'price', op: '<=', value: 0.68 });
+    const q = (p) => new Map([['sh515050', { price: p, changePct: 0 }]]);
+    const h1 = await sH.syncAlerts(q(0.679));
+    check('跌破阈值触发一次', h1.fired.length === 1 && h1.alerts[0].hit === true, h1.fired.length);
+    const h2 = await sH.syncAlerts(q(0.681));
+    check('只回到线上方一点点不重新武装', h2.fired.length === 0 && h2.alerts[0].firedAt != null, h2.alerts[0].firedAt);
+    const h3 = await sH.syncAlerts(q(0.684));
+    check('回到线上方 0.5% 后才重新武装', h3.alerts[0].firedAt === null, h3.alerts[0].firedAt);
+    const h4 = await sH.syncAlerts(q(0.679));
+    check('重新武装后可以再次触发', h4.fired.length === 1, h4.fired.length);
+    fs.rmSync(dirH, { recursive: true, force: true });
+  }
   await s.addTrade({ symbol: 'sh600519', side: 'buy', price: 1622, shares: 100, fee: 0, date: '2026-02-02' });
   check('老库上能记第一笔流水', s.trades.length === 1, s.trades.length);
   const derived = await s.applyDerivedPositions();
