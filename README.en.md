@@ -10,7 +10,7 @@ A stock ticker strip pinned to the top of the DSH window: quotes, holdings, char
 ## Features
 
 - **Ticker strip** — live price and change for watchlist and holdings, scrolling marquee (mouse wheel works too), limit-up/down badges, collapses into a small pill in the title bar
-- **Charts** — intraday (1/3/5 day) and candlesticks (day/week/month/minute) with MA5/10/20/30/60 (price read-outs under the chart plus matching tags on the right axis, both following the crosshair), volume, crosshair, and a cost line
+- **Charts** — intraday (1/3/5 day) and candlesticks (day/week/month/minute) with MA5/10/20/30/60 (price read-outs in the chart's top-left corner plus matching tags on the right axis, both following the crosshair), volume, crosshair, and a cost line
 - **Order book** — 5 levels each side + bid/ask imbalance
 - **Holdings** — shares, cost price, market value, floating and daily P&L (split per currency)
 - **Ledger** — trade history, weighted-average cost, realized P&L

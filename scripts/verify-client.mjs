@@ -1236,6 +1236,15 @@ section('K 线图');
     ['MA5', 'MA10', 'MA20', 'MA30', 'MA60'].every((t) => labels.some((l) => l.startsWith(t))), labels);
   // 右侧价格轴上贴了均线数值块（圆角块用 quadraticCurveTo 画，图上别处没有曲线）
   check('右侧价格轴贴了均线数值块（圆角标签）', ctxCalls.includes('quadraticCurveTo'), ctxCalls.slice(-12));
+  // 读数条浮在画布左上角，不再单独占一行
+  const plot = findByClass(tree, 'dst-kline-plot');
+  check('画布外面套了 .dst-kline-plot 定位容器', plot.length >= 1, plot.length);
+  if (plot.length) {
+    check('读数条塞在画布容器里（左上角浮层）',
+      collect(plot[0]).some((n) => String(n.props && n.props.className || '').includes('dst-legend')), null);
+  }
+  check('读数条是绝对定位（压在图上而不是占位）',
+    /\.dst-legend\{position:absolute/.test(source), null);
   const vals = items.map((n) => {
     const b = collect(n).find((x) => x.tag === 'b');
     return b ? allText(b.kids) : null;
