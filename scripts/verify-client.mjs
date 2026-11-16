@@ -1189,6 +1189,20 @@ section('分时图（默认图型）');
     check('切 3 日会重新请求分时',
       fetchLog.some((u) => u.includes('/trends') && /days=3/.test(u)),
       fetchLog.filter((u) => u.includes('/trends')).slice(-2));
+
+    // 分时图左上角的「价格 / 均价」读数：不悬停也要有数，别只留个名字
+    const trendLegend = findByClass(tree, 'dst-legend-float')
+      .filter((n) => allText(n.kids).includes('均价'));
+    check('分时图有价格/均价读数浮层', trendLegend.length >= 1, trendLegend.length);
+    if (trendLegend.length) {
+      const txt = allText(trendLegend[0].kids).replace(/\s+/g, ' ');
+      check('读数里有「价格」', /价格/.test(txt), txt);
+      check('读数里有「均价」', /均价/.test(txt), txt);
+      const nums = txt.match(/\d[\d,]*\.\d{2,3}/g) || [];
+      check('价格和均价都带具体数值', nums.length >= 2, txt);
+      check('分时读数浮层也压在画布上（.dst-kline-plot 内）',
+        findByClass(tree, 'dst-kline-plot').some((p) => collect(p).includes(trendLegend[0])), null);
+    }
   }
 }
 
@@ -1244,7 +1258,7 @@ section('K 线图');
       collect(plot[0]).some((n) => String(n.props && n.props.className || '').includes('dst-legend')), null);
   }
   check('读数条是绝对定位（压在图上而不是占位）',
-    /\.dst-legend\{position:absolute/.test(source), null);
+    /\.dst-legend-float\{position:absolute/.test(source), null);
   const vals = items.map((n) => {
     const b = collect(n).find((x) => x.tag === 'b');
     return b ? allText(b.kids) : null;
