@@ -38,25 +38,26 @@ dsh plugin --profile desktop remove dsh-stock-bar
 
 ## Usage
 
-Click any symbol in the top strip to open the panel: Holdings / Watchlist / Add / AI review / Trades / Alerts / Settings. Share counts and cost prices are edited inline in the table.
+Click any symbol in the top strip to open the panel: Holdings / Watchlist / Add / AI review / Trades / Alerts / Settings. Share counts and cost prices are edited inline in the table; table headers sort, there is a code/name search box, and a summary row sits at the bottom.
 
 With `dsh-better-sidebar` installed, a "股票" tab also appears in the right sidebar (same components as the top strip; polling pauses while the tab is hidden).
 
 ## Self-checks
 
 ```bash
-node scripts/verify.mjs           # host, 249 assertions
-node scripts/verify-client.mjs    # client rendering, 275 assertions
-node scripts/verify-live.mjs      # real HTTP end-to-end, 173 assertions
-node scripts/verify-analysis.mjs  # AI data pack, 83 assertions
+node scripts/verify.mjs           # host, 336 assertions
+node scripts/verify-client.mjs    # client rendering, 389 assertions
+node scripts/verify-live.mjs      # real HTTP end-to-end, 180 assertions
+node scripts/verify-analysis.mjs  # AI data pack, 151 assertions
 ```
 
-780 assertions in total; none of them need DSH or any API key.
+1056 assertions in total; none of them need DSH or any API key.
 
 ## Notes
 
 - Quotes come from public Eastmoney and Tencent endpoints — **not investment advice**; the plugin does not trade
 - The strip lives inside the DSH window; it is not a desktop-wide always-on-top overlay
+- The expanded strip is a self-sizing floating card that lets clicks through its empty background; collapse it with "—" and hover the pill to peek at quotes on demand
 - Editing `lib/client.js` needs a page refresh; editing `lib/index.js` (host) needs a DSH restart
 
 Routes, internals and known limitations: [docs/notes.md](docs/notes.md) (Chinese). Changelog: [CHANGELOG.md](CHANGELOG.md).

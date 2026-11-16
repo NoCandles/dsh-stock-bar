@@ -1061,6 +1061,90 @@ section('持仓表格');
   check('表格含股数列', /股数|持股/.test(bodyText), null);
 }
 
+section('表格工具条 / 排序 / 搜索 / 汇总');
+{
+  // ---- 工具条 ----
+  const bar = findByClass(tree, 'dst-tablebar');
+  check('有工具条', bar.length === 1, bar.length);
+  const search = findByClass(tree, 'dst-search');
+  check('有搜索框', search.length === 1, search.length);
+  const input = collect(search[0]).find((n) => n.tag === 'input');
+  check('搜索框有输入元素', !!input, null);
+  check('搜索框占位文案够具体',
+    !!input && /搜持仓|搜自选/.test(String(input.props.placeholder || '')),
+    input && input.props.placeholder);
+
+  // ---- 表头排序 ----
+  const ths = findByClass(tree, 'dst-th-sort');
+  check('表头单元格可点排序', ths.length >= 5, ths.length);
+  const onCol = findByClass(tree, 'dst-th-on');
+  check('默认有一列处于排序态', onCol.length === 1, onCol.length);
+  const defKey = onCol.length ? String(onCol[0].props.title || '') : '';
+  check('默认按盈亏%排序（持仓）', /盈亏%/.test(defKey), defKey);
+
+  const priceTh = ths.find((n) => /现价/.test(allText(n.kids)));
+  check('找得到「现价」表头', !!priceTh, null);
+  let sortErr = null;
+  try { priceTh.props.onClick({ preventDefault() {}, stopPropagation() {} }); } catch (e) { sortErr = e; }
+  check('点表头排序不抛错', sortErr === null, sortErr && sortErr.message);
+  await settle(12);
+  const onCol2 = findByClass(tree, 'dst-th-on');
+  check('排序切到「现价」', onCol2.length === 1 && /现价/.test(String(onCol2[0].props.title || '')),
+    onCol2.length ? onCol2[0].props.title : null);
+  const arrow = findByClass(tree, 'dst-th-arrow');
+  check('排序态显示方向箭头', arrow.length === 1 && /[▲▼]/.test(allText(arrow[0].kids)),
+    arrow.length ? allText(arrow[0].kids) : null);
+
+  // ---- 涨跌幅量级条 ----
+  const pctbar = findByClass(tree, 'dst-pctbar');
+  check('涨跌幅带量级条', pctbar.length >= 1, pctbar.length);
+  const fill = pctbar.length ? collect(pctbar[0]).find((n) => n.tag === 'i') : null;
+  check('量级条有宽度（按 |pct| 折算）',
+    !!fill && parseFloat(String((fill.props.style || {}).width)) > 0,
+    fill && fill.props.style);
+
+  // ---- 汇总行 ----
+  const foot = findByClass(tree, 'dst-tablefoot');
+  check('表格底部有汇总行', foot.length === 1, foot.length);
+  const footTxt = foot.length ? allText(foot[0].kids) : '';
+  check('汇总行含持仓只数', /持仓\s*\d+\s*只/.test(footTxt), footTxt);
+  check('汇总行含市值合计', /市值/.test(footTxt), footTxt);
+  check('汇总行含盈亏合计', /盈亏/.test(footTxt), footTxt);
+
+  // ---- 搜索过滤 ----
+  const beforeRows = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function').length;
+  let typeErr = null;
+  try { input.props.onChange({ target: { value: '肯定搜不到的名字' } }); } catch (e) { typeErr = e; }
+  check('输入搜索词不抛错', typeErr === null, typeErr && typeErr.message);
+  await settle(12);
+  const afterRows = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function').length;
+  check('搜索把行过滤掉了', afterRows === 0 && beforeRows > 0, { before: beforeRows, after: afterRows });
+  check('无匹配时给中文提示', /没有匹配/.test(allText(tree)), null);
+  const count = findByClass(tree, 'dst-count');
+  check('计数显示 0 / N 只', count.length === 1 && /0 \/ \d+ 只/.test(allText(count[0].kids)),
+    count.length ? allText(count[0].kids) : null);
+
+  const clearBtn = findByClass(tree, 'dst-search-x');
+  check('有清空搜索按钮', clearBtn.length === 1, clearBtn.length);
+  let clearErr = null;
+  try { clearBtn[0].props.onClick({ preventDefault() {}, stopPropagation() {} }); } catch (e) { clearErr = e; }
+  check('清空搜索不抛错', clearErr === null, clearErr && clearErr.message);
+  await settle(12);
+  const restored = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function').length;
+  check('清空后行回来了', restored === beforeRows, { restored, beforeRows });
+}
+
+section('面板外壳');
+{
+  const head = findByClass(tree, 'dst-panel-head');
+  check('面板有独立抬头', head.length === 1, head.length);
+  check('抬头显示「N 只在看 N 只持仓」',
+    /只在看/.test(allText(tree)) && /只持仓/.test(allText(tree)), null);
+  const close = findByClass(tree, 'dst-panel-close');
+  check('抬头有关闭按钮', close.length === 1, close.length);
+  check('关闭按钮有 title', !!close.length && !!close[0].props.title, close.length && close[0].props.title);
+}
+
 /** 按文案找按钮并点击；找不到返回 false，交给断言报错 */
 function clickText(label) {
   const btns = collect(tree).filter((n) => n.tag === 'button');
@@ -1956,6 +2040,33 @@ section('折叠态');
     check('容器有引用计数，卸载后不留垃圾节点',
       source.includes('acquireTopbarDock') && source.includes('releaseTopbarDock')
       && source.includes('__dshTopbarCount'), null);
+
+    // 悬停「偷看」：鼠标移上胶囊临时浮出行情条，移开 260ms 后自动收回，且不改设置
+    check('胶囊挂了悬停偷看回调',
+      !!dockEls[0] && typeof dockEls[0].props.onMouseEnter === 'function', null);
+    let peekErr = null;
+    try { dockEls[0].props.onMouseEnter({ type: 'mouseenter' }); } catch (e) { peekErr = e; }
+    check('悬停偷看不抛错', peekErr === null, peekErr && peekErr.message);
+    await settle(10);
+    check('悬停后浮出完整行情条',
+      findByClass(tree, 'dst-bar').length === 1, findByClass(tree, 'dst-bar').length);
+    const peekBar = findByClass(tree, 'dst-bar')[0];
+    check('偷看态行情条带 dst-peek 标记',
+      !!peekBar && String(peekBar.props.className).includes('dst-peek'),
+      peekBar && peekBar.props.className);
+    check('偷看态仍保持折叠设置不变', STATE.settings.collapsed === true, STATE.settings.collapsed);
+    if (peekBar) {
+      // 鼠标从胶囊挪到浮出的条上不能断（先 enter 后 leave）
+      peekBar.props.onMouseEnter({ type: 'mouseenter' });
+      await settle(6);
+      check('鼠标在条上时保持展开', findByClass(tree, 'dst-bar').length === 1, null);
+      peekBar.props.onMouseLeave({ type: 'mouseleave' });
+      await new Promise((r) => setTimeout(r, 340));
+      await settle(10);
+      check('移开后自动收回成胶囊',
+        findByClass(tree, 'dst-bar').length === 0 && findByClass(tree, 'dst-dock').length >= 1,
+        { bar: findByClass(tree, 'dst-bar').length, dock: findByClass(tree, 'dst-dock').length });
+    }
   }
 }
 

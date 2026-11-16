@@ -38,25 +38,26 @@ dsh plugin --profile desktop remove dsh-stock-bar
 
 ## 使用
 
-点顶栏任意一只股票展开面板，七个标签页：持仓 / 自选 / 添加 / AI 分析 / 流水 / 预警 / 设置。持仓的股数和成本价直接在表格里改。
+点顶栏任意一只股票展开面板，七个标签页：持仓 / 自选 / 添加 / AI 分析 / 流水 / 预警 / 设置。持仓的股数和成本价直接在表格里改；表头可点排序、可按代码或名称搜索，底部有一行汇总。
 
 装了 `dsh-better-sidebar` 扩展时，右侧栏会多一个「股票」标签页（组件与顶栏共用，标签页不可见时自动暂停轮询）。
 
 ## 自检
 
 ```bash
-node scripts/verify.mjs           # 宿主 249 条（需要联网接口，离线用 --offline）
-node scripts/verify-client.mjs    # 客户端渲染 312 条
-node scripts/verify-live.mjs      # 真 HTTP 端到端 173 条
-node scripts/verify-analysis.mjs  # AI 数据包 95 条
+node scripts/verify.mjs           # 宿主 336 条（需要联网接口，离线用 --offline）
+node scripts/verify-client.mjs    # 客户端渲染 389 条
+node scripts/verify-live.mjs      # 真 HTTP 端到端 180 条
+node scripts/verify-analysis.mjs  # AI 数据包 151 条
 ```
 
-合计 829 条断言，不需要 DSH，也不需要任何密钥。
+合计 1056 条断言，不需要 DSH，也不需要任何密钥。
 
 ## 说明
 
 - 行情来自东方财富与腾讯的公开接口，**不构成投资建议**；插件不做交易
 - 行情条在 DSH 窗口内，不是覆盖全桌面的悬浮窗
+- 展开的行情条是一张宽度自适应的小浮卡，空白处不拦截点击；嫌它压着内容就点「—」折叠成胶囊，之后鼠标移上去还能临时浮出来看一眼
 - 折叠胶囊不自己写坐标，而是 `createPortal` 进共享容器 `#dsh-topbar-dock`，靠 flex `order` 与其它顶栏插件排队（本插件 `order:40` 靠左，「每日一关」`order:90` 靠右）；容器 `pointer-events:none`，只有子项吃点击
 - 只改 `lib/client.js` 刷新页面即可；改了 `lib/index.js`（宿主）必须重启 DSH
 
