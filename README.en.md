@@ -46,18 +46,18 @@ With `dsh-better-sidebar` installed, a "股票" tab also appears in the right si
 
 ```bash
 node scripts/verify.mjs           # host, 336 assertions
-node scripts/verify-client.mjs    # client rendering, 389 assertions
+node scripts/verify-client.mjs    # client rendering, 391 assertions
 node scripts/verify-live.mjs      # real HTTP end-to-end, 180 assertions
 node scripts/verify-analysis.mjs  # AI data pack, 151 assertions
 ```
 
-1056 assertions in total; none of them need DSH or any API key.
+1058 assertions in total; none of them need DSH or any API key.
 
 ## Notes
 
 - Quotes come from public Eastmoney and Tencent endpoints — **not investment advice**; the plugin does not trade
 - The strip lives inside the DSH window; it is not a desktop-wide always-on-top overlay
-- The expanded strip is a self-sizing floating card that lets clicks through its empty background; collapse it with "—" and hover the pill to peek at quotes on demand
+- The expanded strip is a self-sizing floating card that lets clicks through its empty background; collapse it with "—" and click the pill to expand again (no hover-to-expand, which used to make the UI vanish as soon as the mouse moved)
 - Editing `lib/client.js` needs a page refresh; editing `lib/index.js` (host) needs a DSH restart
 
 Routes, internals and known limitations: [docs/notes.md](docs/notes.md) (Chinese). Changelog: [CHANGELOG.md](CHANGELOG.md).

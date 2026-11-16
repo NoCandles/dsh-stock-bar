@@ -2041,31 +2041,44 @@ section('折叠态');
       source.includes('acquireTopbarDock') && source.includes('releaseTopbarDock')
       && source.includes('__dshTopbarCount'), null);
 
-    // 悬停「偷看」：鼠标移上胶囊临时浮出行情条，移开 260ms 后自动收回，且不改设置
-    check('胶囊挂了悬停偷看回调',
-      !!dockEls[0] && typeof dockEls[0].props.onMouseEnter === 'function', null);
-    let peekErr = null;
-    try { dockEls[0].props.onMouseEnter({ type: 'mouseenter' }); } catch (e) { peekErr = e; }
-    check('悬停偷看不抛错', peekErr === null, peekErr && peekErr.message);
-    await settle(10);
-    check('悬停后浮出完整行情条',
-      findByClass(tree, 'dst-bar').length === 1, findByClass(tree, 'dst-bar').length);
-    const peekBar = findByClass(tree, 'dst-bar')[0];
-    check('偷看态行情条带 dst-peek 标记',
-      !!peekBar && String(peekBar.props.className).includes('dst-peek'),
-      peekBar && peekBar.props.className);
-    check('偷看态仍保持折叠设置不变', STATE.settings.collapsed === true, STATE.settings.collapsed);
-    if (peekBar) {
-      // 鼠标从胶囊挪到浮出的条上不能断（先 enter 后 leave）
-      peekBar.props.onMouseEnter({ type: 'mouseenter' });
-      await settle(6);
-      check('鼠标在条上时保持展开', findByClass(tree, 'dst-bar').length === 1, null);
-      peekBar.props.onMouseLeave({ type: 'mouseleave' });
-      await new Promise((r) => setTimeout(r, 340));
-      await settle(10);
-      check('移开后自动收回成胶囊',
-        findByClass(tree, 'dst-bar').length === 0 && findByClass(tree, 'dst-dock').length >= 1,
-        { bar: findByClass(tree, 'dst-bar').length, dock: findByClass(tree, 'dst-dock').length });
+    // 胶囊只响应点击，不响应悬停：悬停自动展开会让「鼠标移开」把面板卸载掉
+    check('胶囊不再挂悬停回调（只认点击）',
+      !!dockEls[0]
+      && typeof dockEls[0].props.onMouseEnter !== 'function'
+      && typeof dockEls[0].props.onMouseLeave !== 'function',
+      dockEls[0] && Object.keys(dockEls[0].props));
+    check('胶囊提示文案是「点一下展开」',
+      /点一下展开/.test(String((dockEls[0] || {}).props && dockEls[0].props.title || '')),
+      dockEls[0] && dockEls[0].props.title);
+    check('源码里没有 peek 残留', !/hoverPeek|dst-peek|const \[peek/.test(source), null);
+
+    let expandErr = null;
+    try { dockEls[0].props.onClick({ preventDefault() {}, stopPropagation() {} }); } catch (e) { expandErr = e; }
+    check('点击胶囊展开不抛错', expandErr === null, expandErr && expandErr.message);
+    await settle(12);
+    check('点击后应展开完整行情条',
+      findByClass(tree, 'dst-bar').length === 1 && findByClass(tree, 'dst-dock').length === 0,
+      { bar: findByClass(tree, 'dst-bar').length, dock: findByClass(tree, 'dst-dock').length });
+    check('展开后设置已持久化（collapsed=false）', STATE.settings.collapsed === false, STATE.settings.collapsed);
+
+    // 面板开着时「鼠标移开」不能把界面收回折叠态
+    const brandBtn = collect(tree).filter((n) => n.tag === 'button' || n.props.className === 'dst-brand' || (n.props.className || '').includes('dst-brand'));
+    const chips = collect(tree).filter((n) => typeof (n.props && n.props.onClick) === 'function'
+      && String(n.props.className || '').includes('dst-chip'));
+    const opener = chips[0] || brandBtn[0];
+    check('找得到展开面板的入口', !!opener, { chips: chips.length, brand: brandBtn.length });
+    if (opener) {
+      opener.props.onClick({ preventDefault() {}, stopPropagation() {} });
+      await settle(12);
+      check('面板已展开', findByClass(tree, 'dst-panel').length === 1, findByClass(tree, 'dst-panel').length);
+      // 模拟「鼠标在界面里移动」——触发条与根节点的 enter/leave，不应改变渲染
+      const bar = findByClass(tree, 'dst-bar')[0];
+      if (bar && typeof bar.props.onMouseLeave === 'function') bar.props.onMouseLeave({ type: 'mouseleave' });
+      await new Promise((r) => setTimeout(r, 320));
+      await settle(12);
+      check('鼠标移开后面板仍在（不再被折叠分支卸载）',
+        findByClass(tree, 'dst-panel').length === 1 && findByClass(tree, 'dst-bar').length === 1,
+        { panel: findByClass(tree, 'dst-panel').length, bar: findByClass(tree, 'dst-bar').length });
     }
   }
 }
