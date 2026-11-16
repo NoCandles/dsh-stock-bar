@@ -503,6 +503,8 @@ function fakeFetch(url, init = {}) {
 let drawCalls = 0;
 /** canvas 上真正落笔的文字。成本线要在图上写「成本 xxx」，只能靠这个断言。 */
 const textCalls = [];
+const rectCalls = [];
+const ctxCalls = [];
 const styleTags = [];
 /** 所有 document.createElement 出来的节点。K 线 canvas 是命令式创建再挂到 ref 上的，
  *  不在 React 树里，只能靠这个登记表找到。 */
@@ -520,7 +522,10 @@ function makeCtx2d(node) {
       if (k === 'fillText' || k === 'strokeText') {
         return (text) => { drawCalls++; textCalls.push(String(text)); return undefined; };
       }
-      return () => { drawCalls++; return undefined; };
+      if (k === 'fillRect') {
+        return (x, y, w, h) => { drawCalls++; rectCalls.push([x, y, w, h]); return undefined; };
+      }
+      return (...args) => { drawCalls++; ctxCalls.push(k); void args; return undefined; };
     },
     set(t, k, v) { t[k] = v; return true; },
   });
@@ -1223,12 +1228,14 @@ section('K 线图');
   check('canvas 真的被绘制了', drawCalls > drawsBefore, { before: drawsBefore, after: drawCalls });
   check('K 线相关文案出现', /日K|周K|前复权/.test(allText(tree)), null);
 
-  // 均线读数：不悬停时给最新一根的具体价位，四条 MA 都带数字
+  // 均线读数：不悬停时给最新一根的具体价位，每条 MA 都带数字
   const items = findByClass(tree, 'dst-legend-item');
-  check('均线读数条有 4 条', items.length === 4, items.length);
+  check('均线读数条有 5 条', items.length === 5, items.length);
   const labels = items.map((n) => allText(n.kids).replace(/\s+/g, ''));
-  check('读数条标了 MA5/MA10/MA20/MA60',
-    ['MA5', 'MA10', 'MA20', 'MA60'].every((t) => labels.some((l) => l.startsWith(t))), labels);
+  check('读数条标了 MA5/MA10/MA20/MA30/MA60',
+    ['MA5', 'MA10', 'MA20', 'MA30', 'MA60'].every((t) => labels.some((l) => l.startsWith(t))), labels);
+  // 右侧价格轴上贴了均线数值块（圆角块用 quadraticCurveTo 画，图上别处没有曲线）
+  check('右侧价格轴贴了均线数值块（圆角标签）', ctxCalls.includes('quadraticCurveTo'), ctxCalls.slice(-12));
   const vals = items.map((n) => {
     const b = collect(n).find((x) => x.tag === 'b');
     return b ? allText(b.kids) : null;
@@ -1252,7 +1259,7 @@ section('K 线图');
       const b = collect(n).find((x) => x.tag === 'b');
       return b ? allText(b.kids) : null;
     });
-    check('悬停后读数条仍在（不再被隐藏）', items2.length === 4, items2.length);
+    check('悬停后读数条仍在（不再被隐藏）', items2.length === 5, items2.length);
     check('悬停后均线数值随光标变化', vals2.join('|') !== before.join('|'), { before, after: vals2 });
     check('悬停时标出是哪一天', /←\s*\d{4}-\d{2}-\d{2}/.test(allText(tree)), null);
   }
