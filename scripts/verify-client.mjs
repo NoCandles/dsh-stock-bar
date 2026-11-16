@@ -1222,6 +1222,40 @@ section('K 线图');
   check('K 线请求带 period/adjust/count', klineUrls.some((u) => /period=/.test(u) && /adjust=/.test(u) && /count=/.test(u)), klineUrls.slice(-1));
   check('canvas 真的被绘制了', drawCalls > drawsBefore, { before: drawsBefore, after: drawCalls });
   check('K 线相关文案出现', /日K|周K|前复权/.test(allText(tree)), null);
+
+  // 均线读数：不悬停时给最新一根的具体价位，四条 MA 都带数字
+  const items = findByClass(tree, 'dst-legend-item');
+  check('均线读数条有 4 条', items.length === 4, items.length);
+  const labels = items.map((n) => allText(n.kids).replace(/\s+/g, ''));
+  check('读数条标了 MA5/MA10/MA20/MA60',
+    ['MA5', 'MA10', 'MA20', 'MA60'].every((t) => labels.some((l) => l.startsWith(t))), labels);
+  const vals = items.map((n) => {
+    const b = collect(n).find((x) => x.tag === 'b');
+    return b ? allText(b.kids) : null;
+  });
+  check('每条均线都显示了具体价格', vals.every((v) => v && /\d/.test(v) && v !== '--'), vals);
+  check('均线价格是两位以上小数（不是整数占位）',
+    vals.every((v) => /^\d[\d,]*\.\d{2,3}$/.test(String(v))), vals);
+
+  // 读数随悬停走：鼠标移到更早的一根上，数值应变化
+  const canvasEl = collect(tree).find((n) => n.tag === 'canvas' && typeof n.props.onMouseMove === 'function');
+  check('canvas 挂了悬停回调', !!canvasEl, null);
+  if (canvasEl) {
+    const before = vals.slice();
+    canvasEl.props.onMouseMove({
+      currentTarget: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 700, height: 300 }) },
+      clientX: 40, clientY: 120,
+    });
+    await settle(10);
+    const items2 = findByClass(tree, 'dst-legend-item');
+    const vals2 = items2.map((n) => {
+      const b = collect(n).find((x) => x.tag === 'b');
+      return b ? allText(b.kids) : null;
+    });
+    check('悬停后读数条仍在（不再被隐藏）', items2.length === 4, items2.length);
+    check('悬停后均线数值随光标变化', vals2.join('|') !== before.join('|'), { before, after: vals2 });
+    check('悬停时标出是哪一天', /←\s*\d{4}-\d{2}-\d{2}/.test(allText(tree)), null);
+  }
 }
 
 section('成本线（持仓时画在图上）');
