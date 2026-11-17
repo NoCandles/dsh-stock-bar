@@ -1,5 +1,19 @@
 # 更新日志
 
+## 1.9.5 — 2026-11-17
+
+### 修拖动后「鼠标控制不了」
+- 现象（用户报）：把行情条往窗口顶部标题栏方向拖、或者拖到屏幕边缘，鼠标就动不了、整块界面像卡死。
+- 根因：上一版用 `setPointerCapture` 把指针锁在 `⋮⋮` 把手上收事件。指针一旦滑进窗口标题栏（Electron 的原生拖窗区）或移出窗口，把手就**再也收不到 `pointerup`**，拖动态永远挂着：`grabbing` 光标不还原、条内所有按钮被 `pointer-events:none` 禁掉，看起来就是「鼠标失控」。
+- 修法：
+  - **不再用 pointer capture**，拖动事件同时挂到 `window` 上（capture 阶段兜底），指针跑到条外、标题栏、窗口边缘都还能收到移动与松手。
+  - 三道自救：`pointermove` 里 `e.buttons === 0` 直接收尾；`pointerup / mouseup / pointercancel / window blur` 任一到达即收尾；再来一次 `pointerdown` 也会先把上一次收尾。
+  - `Esc` 取消这次拖动（位置不变）。
+  - 上界改成 **0**：行情条不许再拖进标题栏（那里是原生拖窗区），往下不超出窗口底部；老存档里的负数 `topOffset` 读出来自动归 0。
+  - `.dst-bar` / `.dst-drag` 加 `-webkit-app-region:no-drag` + `touch-action:none`，杜绝「拖条变成拖窗口」。
+  - 组件卸载时清掉 window 监听，不留 grabbing 光标。
+- 自检：`verify-client` 426（+10：拖进标题栏被夹、丢失 pointerup 自救、Esc 取消、监听解绑）、`verify.mjs` 228、`verify-analysis` 151。
+
 ## 1.9.4 — 2026-11-17
 
 ### 行情条能拖了

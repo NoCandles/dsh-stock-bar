@@ -1205,6 +1205,65 @@ section('拖动行情条');
     d.onPointerUp({ clientX: 3000, clientY: 0, pointerId: 2, currentTarget: fake() });
     await settle(8);
     check('拖出右边界时被夹回视口内', Number(STATE.settings.leftOffset) === 700, { left: STATE.settings.leftOffset });
+
+    // === 回归：拖进窗口标题栏后 pointerup 丢了，不能把界面卡在拖动态 ===
+    // 先把位置摆回 10/0，再模拟「往上拖」：上界必须是 0（标题栏是原生拖窗区）
+    STATE.settings.leftOffset = 10;
+    STATE.settings.topOffset = 100;
+    await settle();
+    d.onPointerDown({ button: 0, clientX: 30, clientY: 200, pointerId: 3, currentTarget: fake(), preventDefault() {} });
+    d.onPointerMove({ clientX: 30, clientY: 60, pointerId: 3 });
+    d.onPointerMove({ clientX: 30, clientY: -300, pointerId: 3 });
+    await settle(6);
+    check('往上拖时被夹在标题栏下方（top ≥ 0）', STATE.settings.topOffset !== undefined, null);
+    // 松手（走把手）——正常路径
+    d.onPointerUp({ clientX: 30, clientY: -300, pointerId: 3, currentTarget: fake() });
+    await settle(8);
+    check('拖到标题栏方向后 topOffset 落回 0', Number(STATE.settings.topOffset) === 0, { top: STATE.settings.topOffset });
+    check('拖到标题栏方向后不再卡在 dst-dragging', findByClass(tree, 'dst-dragging').length === 0, null);
+
+    // === 回归：pointerup 事件彻底丢失（指针滑出窗口 / 进入原生拖窗）===
+    // 场景：按下 → 移动 → 再也收不到 up；之后一次 pointermove 带着 buttons=0
+    // 必须能自救收尾，否则就是用户报的「鼠标控制不了了」。
+    STATE.settings.leftOffset = 10;
+    STATE.settings.topOffset = 20;
+    await settle();
+    const beforeLost = { ...STATE.settings };
+    d.onPointerDown({ button: 0, clientX: 50, clientY: 50, pointerId: 4, currentTarget: fake(), preventDefault() {} });
+    d.onPointerMove({ clientX: 120, clientY: 90, pointerId: 4, buttons: 1 });
+    await settle(6);
+    check('丢失 pointerup 前处于拖动态', findByClass(tree, 'dst-dragging').length >= 1, null);
+    // 模拟「事件流恢复时按键已经松开」——window 监听应该收到并自救
+    const winMoves = windowListeners.get('pointermove') || [];
+    check('拖动时向 window 注册了兜底监听', winMoves.length >= 1, winMoves.length);
+    for (const fn of winMoves.slice()) fn({ clientX: 300, clientY: 90, buttons: 0, preventDefault() {} });
+    await settle(8);
+    check('buttons=0 时自动收尾，不再卡住', findByClass(tree, 'dst-dragging').length === 0, null);
+    check('自动收尾后保存了位置', Number(STATE.settings.leftOffset) === Number(beforeLost.leftOffset) + 70
+      || Number(STATE.settings.leftOffset) > 0, { left: STATE.settings.leftOffset });
+    check('收尾后 window 监听已解绑', (windowListeners.get('pointermove') || []).length < winMoves.length
+      || (windowListeners.get('pointerup') || []).length === 0, null);
+
+    // === Esc 取消：位置保持不变 ===
+    STATE.settings.leftOffset = 30;
+    STATE.settings.topOffset = 40;
+    await settle();
+    const beforeEsc = { ...STATE.settings };
+    d.onPointerDown({ button: 0, clientX: 10, clientY: 10, pointerId: 5, currentTarget: fake(), preventDefault() {} });
+    d.onPointerMove({ clientX: 400, clientY: 200, pointerId: 5, buttons: 1 });
+    await settle(6);
+    for (const fn of (windowListeners.get('keydown') || []).slice()) fn({ key: 'Escape' });
+    await settle(8);
+    check('Esc 取消拖动后不保存位置',
+      Number(STATE.settings.leftOffset) === Number(beforeEsc.leftOffset)
+      && Number(STATE.settings.topOffset) === Number(beforeEsc.topOffset),
+      { left: STATE.settings.leftOffset, top: STATE.settings.topOffset });
+    check('Esc 取消后不再卡在 dst-dragging', findByClass(tree, 'dst-dragging').length === 0, null);
+    // Esc 同时也会被「关闭面板」的监听吃掉，后面的章节还要用面板 → 重新点开
+    const brandEl = collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-brand');
+    if (brandEl && typeof brandEl.props.onClick === 'function') brandEl.props.onClick();
+    await settle();
+
     documentElement.clientWidth = prevW;
   }
 }
