@@ -1198,14 +1198,31 @@ section('拖动行情条');
     const before = { ...STATE.settings };
     dragProps().onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 1, currentTarget: fake(), preventDefault() {} });
     await settle(4);
+    // mock 的 rAF 有个总量上限（防止测试里无限自绘），前面章节用掉了，这里重置一下
+    rafCount = 0;
     dragProps().onPointerMove({ clientX: 60, clientY: 12, pointerId: 1 });
     dragProps().onPointerMove({ clientX: 110, clientY: 24, pointerId: 1 });
     await settle(4);
     check('拖动过程中条跟着动（有临时位置）',
       /dst-dragging/.test(allText(tree)) || findByClass(tree, 'dst-dragging').length >= 1
       || collect(tree).some((n) => String(n.props && n.props.className || '').includes('dst-dragging')), null);
+    // 拖动中是「直接改 transform」的：布局位置（marginLeft）必须还停在起点，
+    // 否则每个 pointermove 都要重排整棵树，快拖就会一顿一顿
+    const barNodeOf = () => collect(tree).find((n) => String(n.props && n.props.className || '').startsWith('dst-bar'));
+    const barRef = barNodeOf() && barNodeOf().props.ref;
+    const liveEl = barRef && barRef.current;
+    check('拖动中只改 transform、不改布局位置',
+      Number.parseFloat(String(barNodeOf().props.style.marginLeft)) === 10,
+      { marginLeft: barNodeOf().props.style.marginLeft });
+    check('拖动中把位移写到元素的 transform 上',
+      !!liveEl && /translate3d\(100px, 24px/.test(String((liveEl.style || {}).transform || '')),
+      liveEl && (liveEl.style || {}).transform);
+    check('拖动中给条开 GPU 合成提示（will-change:transform）',
+      barNodeOf().props.style.willChange === 'transform', barNodeOf().props.style.willChange);
     dragProps().onPointerUp({ clientX: 110, clientY: 24, pointerId: 1, currentTarget: fake() });
     await settle(8);
+    check('松手后清掉 transform（位置改由布局接管）',
+      !!liveEl && !String((liveEl.style || {}).transform || ''), liveEl && (liveEl.style || {}).transform);
     check('松手后保存水平偏移 +100', Number(STATE.settings.leftOffset) === Number(before.leftOffset || 10) + 100,
       { before: before.leftOffset, after: STATE.settings.leftOffset });
     check('松手后保存垂直偏移 +24', Number(STATE.settings.topOffset) === Number(before.topOffset || 0) + 24,
