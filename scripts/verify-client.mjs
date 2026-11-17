@@ -1173,51 +1173,71 @@ section('拖动行情条');
   const drags = collect(tree).filter((n) => String(n.props && n.props.className || '') === 'dst-drag');
   check('行情条上有拖动把手', drags.length >= 1, drags.length);
   if (drags.length) {
-    const d = drags[0].props;
-    // 视口按真实桌面宽度算（mock 默认 clientWidth=720，换成 1440 才好验拖动夹取）
+    // 每次渲染都会重建节点，交互时现取：一开始抓到的 props 闭包里是旧位置
+    const dragProps = () => (collect(tree)
+      .find((n) => String(n.props && n.props.className || '') === 'dst-drag') || { props: {} }).props;
+    const d = dragProps();
+    // 视口按真实桌面宽度算（mock 默认 clientWidth=720，换成 1440 才好验拖动夹取）；
+    // 直接改 clientWidth 不触发 resize，得手动派发一次，组件才会刷新 viewSize
     const prevW = documentElement.clientWidth;
     documentElement.clientWidth = 1440;
+    window.innerWidth = 1440;
+    for (const fn of (windowListeners.get('resize') || []).slice()) fn({});
+    await settle();
     check('把手挂了 pointer 按下/移动/松开',
-      typeof d.onPointerDown === 'function' && typeof d.onPointerMove === 'function'
-      && typeof d.onPointerUp === 'function', null);
+      typeof dragProps().onPointerDown === 'function' && typeof dragProps().onPointerMove === 'function'
+      && typeof dragProps().onPointerUp === 'function', null);
     check('把手带「拖动/复位」提示', /拖动/.test(String(d.title || '')), d.title);
-    // 模拟拖 100px 右、24px 下
+    // 模拟拖 100px 右、24px 下（先把起点钉成 10/0 像素、清掉百分比，好算期望值）
     const fake = () => ({ setPointerCapture() {}, releasePointerCapture() {} });
+    STATE.settings.leftOffset = 10;
+    STATE.settings.topOffset = 0;
+    STATE.settings.leftPct = null;
+    STATE.settings.topPct = null;
+    await settle();
     const before = { ...STATE.settings };
-    d.onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 1, currentTarget: fake(), preventDefault() {} });
+    dragProps().onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 1, currentTarget: fake(), preventDefault() {} });
     await settle(4);
-    d.onPointerMove({ clientX: 60, clientY: 12, pointerId: 1 });
-    d.onPointerMove({ clientX: 110, clientY: 24, pointerId: 1 });
+    dragProps().onPointerMove({ clientX: 60, clientY: 12, pointerId: 1 });
+    dragProps().onPointerMove({ clientX: 110, clientY: 24, pointerId: 1 });
     await settle(4);
     check('拖动过程中条跟着动（有临时位置）',
       /dst-dragging/.test(allText(tree)) || findByClass(tree, 'dst-dragging').length >= 1
       || collect(tree).some((n) => String(n.props && n.props.className || '').includes('dst-dragging')), null);
-    d.onPointerUp({ clientX: 110, clientY: 24, pointerId: 1, currentTarget: fake() });
+    dragProps().onPointerUp({ clientX: 110, clientY: 24, pointerId: 1, currentTarget: fake() });
     await settle(8);
     check('松手后保存水平偏移 +100', Number(STATE.settings.leftOffset) === Number(before.leftOffset || 10) + 100,
       { before: before.leftOffset, after: STATE.settings.leftOffset });
     check('松手后保存垂直偏移 +24', Number(STATE.settings.topOffset) === Number(before.topOffset || 0) + 24,
       { before: before.topOffset, after: STATE.settings.topOffset });
+    check('拖动后按窗口百分比记住水平位置',
+      Math.abs(Number(STATE.settings.leftPct) - (110 / 1440) * 100) <= 0.15,
+      { leftPct: STATE.settings.leftPct, expect: Math.round((110 / 1440) * 1000) / 10 });
+    check('拖动后按窗口百分比记住垂直位置',
+      Number.isFinite(Number(STATE.settings.topPct)) && Number(STATE.settings.topPct) > 0,
+      { topPct: STATE.settings.topPct });
     check('拖动结束后不再挂着 dst-dragging', findByClass(tree, 'dst-dragging').length === 0, null);
     // 再拖一次、故意拖出右边界：条不能被拖出视口（视口 1440、条 720 → 上限 700）
-    d.onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 2, currentTarget: fake(), preventDefault() {} });
-    d.onPointerMove({ clientX: 3000, clientY: 0, pointerId: 2 });
-    d.onPointerUp({ clientX: 3000, clientY: 0, pointerId: 2, currentTarget: fake() });
+    dragProps().onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 2, currentTarget: fake(), preventDefault() {} });
+    dragProps().onPointerMove({ clientX: 3000, clientY: 0, pointerId: 2 });
+    dragProps().onPointerUp({ clientX: 3000, clientY: 0, pointerId: 2, currentTarget: fake() });
     await settle(8);
     check('拖出右边界时被夹回视口内', Number(STATE.settings.leftOffset) === 700, { left: STATE.settings.leftOffset });
 
     // === 回归：拖进窗口标题栏后 pointerup 丢了，不能把界面卡在拖动态 ===
-    // 先把位置摆回 10/0，再模拟「往上拖」：上界必须是 0（标题栏是原生拖窗区）
+    // 先把位置摆回 10/100 像素并清掉百分比，再模拟「往上拖」：上界必须是 0（标题栏是原生拖窗区）
     STATE.settings.leftOffset = 10;
     STATE.settings.topOffset = 100;
+    STATE.settings.leftPct = null;
+    STATE.settings.topPct = null;
     await settle();
-    d.onPointerDown({ button: 0, clientX: 30, clientY: 200, pointerId: 3, currentTarget: fake(), preventDefault() {} });
-    d.onPointerMove({ clientX: 30, clientY: 60, pointerId: 3 });
-    d.onPointerMove({ clientX: 30, clientY: -300, pointerId: 3 });
+    dragProps().onPointerDown({ button: 0, clientX: 30, clientY: 200, pointerId: 3, currentTarget: fake(), preventDefault() {} });
+    dragProps().onPointerMove({ clientX: 30, clientY: 60, pointerId: 3 });
+    dragProps().onPointerMove({ clientX: 30, clientY: -300, pointerId: 3 });
     await settle(6);
     check('往上拖时被夹在标题栏下方（top ≥ 0）', STATE.settings.topOffset !== undefined, null);
     // 松手（走把手）——正常路径
-    d.onPointerUp({ clientX: 30, clientY: -300, pointerId: 3, currentTarget: fake() });
+    dragProps().onPointerUp({ clientX: 30, clientY: -300, pointerId: 3, currentTarget: fake() });
     await settle(8);
     check('拖到标题栏方向后 topOffset 落回 0', Number(STATE.settings.topOffset) === 0, { top: STATE.settings.topOffset });
     check('拖到标题栏方向后不再卡在 dst-dragging', findByClass(tree, 'dst-dragging').length === 0, null);
@@ -1227,10 +1247,12 @@ section('拖动行情条');
     // 必须能自救收尾，否则就是用户报的「鼠标控制不了了」。
     STATE.settings.leftOffset = 10;
     STATE.settings.topOffset = 20;
+    STATE.settings.leftPct = null;
+    STATE.settings.topPct = null;
     await settle();
     const beforeLost = { ...STATE.settings };
-    d.onPointerDown({ button: 0, clientX: 50, clientY: 50, pointerId: 4, currentTarget: fake(), preventDefault() {} });
-    d.onPointerMove({ clientX: 120, clientY: 90, pointerId: 4, buttons: 1 });
+    dragProps().onPointerDown({ button: 0, clientX: 50, clientY: 50, pointerId: 4, currentTarget: fake(), preventDefault() {} });
+    dragProps().onPointerMove({ clientX: 120, clientY: 90, pointerId: 4, buttons: 1 });
     await settle(6);
     check('丢失 pointerup 前处于拖动态', findByClass(tree, 'dst-dragging').length >= 1, null);
     // 模拟「事件流恢复时按键已经松开」——window 监听应该收到并自救
@@ -1247,10 +1269,12 @@ section('拖动行情条');
     // === Esc 取消：位置保持不变 ===
     STATE.settings.leftOffset = 30;
     STATE.settings.topOffset = 40;
+    STATE.settings.leftPct = null;
+    STATE.settings.topPct = null;
     await settle();
     const beforeEsc = { ...STATE.settings };
-    d.onPointerDown({ button: 0, clientX: 10, clientY: 10, pointerId: 5, currentTarget: fake(), preventDefault() {} });
-    d.onPointerMove({ clientX: 400, clientY: 200, pointerId: 5, buttons: 1 });
+    dragProps().onPointerDown({ button: 0, clientX: 10, clientY: 10, pointerId: 5, currentTarget: fake(), preventDefault() {} });
+    dragProps().onPointerMove({ clientX: 400, clientY: 200, pointerId: 5, buttons: 1 });
     await settle(6);
     for (const fn of (windowListeners.get('keydown') || []).slice()) fn({ key: 'Escape' });
     await settle(8);
@@ -1264,6 +1288,24 @@ section('拖动行情条');
     if (brandEl && typeof brandEl.props.onClick === 'function') brandEl.props.onClick();
     await settle();
 
+    // === 百分比：窗口变宽后位置按比例跟随（换显示器 / 调窗口宽度不跑偏）===
+    // 先摆一个 20% / 10% 的位置，再把窗口从 1440 拉到 1920，看条是不是也在 20% 处
+    STATE.settings.leftPct = 20;
+    STATE.settings.topPct = 10;
+    STATE.settings.leftOffset = 288;
+    STATE.settings.topOffset = 86;
+    await settle();
+    const barOf = () => collect(tree).find((n) => String(n.props && n.props.className || '').startsWith('dst-bar'));
+    const mlBefore = parseFloat(String(barOf().props.style.marginLeft));
+    window.innerWidth = 1920;
+    documentElement.clientWidth = 1920;
+    for (const fn of (windowListeners.get('resize') || []).slice()) fn({});
+    await settle();
+    const mlAfter = parseFloat(String(barOf().props.style.marginLeft));
+    check('窗口变宽后按百分比跟随（1440→1920 约 1.33 倍）',
+      Math.abs(mlAfter / mlBefore - 1920 / 1440) < 0.06,
+      { before: mlBefore, after: mlAfter });
+    window.innerWidth = 1440;
     documentElement.clientWidth = prevW;
   }
 }
