@@ -1168,6 +1168,47 @@ function clickTitle(part) {
   return true;
 }
 
+section('拖动行情条');
+{
+  const drags = collect(tree).filter((n) => String(n.props && n.props.className || '') === 'dst-drag');
+  check('行情条上有拖动把手', drags.length >= 1, drags.length);
+  if (drags.length) {
+    const d = drags[0].props;
+    // 视口按真实桌面宽度算（mock 默认 clientWidth=720，换成 1440 才好验拖动夹取）
+    const prevW = documentElement.clientWidth;
+    documentElement.clientWidth = 1440;
+    check('把手挂了 pointer 按下/移动/松开',
+      typeof d.onPointerDown === 'function' && typeof d.onPointerMove === 'function'
+      && typeof d.onPointerUp === 'function', null);
+    check('把手带「拖动/复位」提示', /拖动/.test(String(d.title || '')), d.title);
+    // 模拟拖 100px 右、24px 下
+    const fake = () => ({ setPointerCapture() {}, releasePointerCapture() {} });
+    const before = { ...STATE.settings };
+    d.onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 1, currentTarget: fake(), preventDefault() {} });
+    await settle(4);
+    d.onPointerMove({ clientX: 60, clientY: 12, pointerId: 1 });
+    d.onPointerMove({ clientX: 110, clientY: 24, pointerId: 1 });
+    await settle(4);
+    check('拖动过程中条跟着动（有临时位置）',
+      /dst-dragging/.test(allText(tree)) || findByClass(tree, 'dst-dragging').length >= 1
+      || collect(tree).some((n) => String(n.props && n.props.className || '').includes('dst-dragging')), null);
+    d.onPointerUp({ clientX: 110, clientY: 24, pointerId: 1, currentTarget: fake() });
+    await settle(8);
+    check('松手后保存水平偏移 +100', Number(STATE.settings.leftOffset) === Number(before.leftOffset || 10) + 100,
+      { before: before.leftOffset, after: STATE.settings.leftOffset });
+    check('松手后保存垂直偏移 +24', Number(STATE.settings.topOffset) === Number(before.topOffset || 0) + 24,
+      { before: before.topOffset, after: STATE.settings.topOffset });
+    check('拖动结束后不再挂着 dst-dragging', findByClass(tree, 'dst-dragging').length === 0, null);
+    // 再拖一次、故意拖出右边界：条不能被拖出视口（视口 1440、条 720 → 上限 700）
+    d.onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 2, currentTarget: fake(), preventDefault() {} });
+    d.onPointerMove({ clientX: 3000, clientY: 0, pointerId: 2 });
+    d.onPointerUp({ clientX: 3000, clientY: 0, pointerId: 2, currentTarget: fake() });
+    await settle(8);
+    check('拖出右边界时被夹回视口内', Number(STATE.settings.leftOffset) === 700, { left: STATE.settings.leftOffset });
+    documentElement.clientWidth = prevW;
+  }
+}
+
 section('分时图（默认图型）');
 {
   const drawsBefore = drawCalls;
