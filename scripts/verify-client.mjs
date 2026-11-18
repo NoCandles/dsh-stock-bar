@@ -2115,12 +2115,13 @@ section('组件开关（设置 → 显示）');
   const subLabels = () => findByClass(tree, 'dst-sub').map((n) => allText(n).trim());
   /** 选中表格里的第一行；已经选中时不要再点（再点会收起，这是本插件的切换式选中） */
   async function ensureRowSelected() {
-    if (findByClass(tree, 'dst-kline-title').length) return true;
+    // 用高亮行本身判断选中态；图表开着时也可用 dst-kline-title（图表头标题）兜底
+    if (findByClass(tree, 'dst-rowsel').length || findByClass(tree, 'dst-kline-title').length) return true;
     const trs = collect(tree).filter((n) => n.tag === 'tr' && n.props.onClick);
     if (!trs.length) return false;
     trs[0].props.onClick({ preventDefault() {}, stopPropagation() {} });
     await settle(14);
-    return findByClass(tree, 'dst-kline-title').length > 0;
+    return findByClass(tree, 'dst-rowsel').length > 0 || findByClass(tree, 'dst-kline-title').length > 0;
   }
 
   check('切到设置标签页', clickText('设置'));
