@@ -107,7 +107,26 @@ const STATE = {
       kind: 'pct', op: '<=', value: -3, enabled: true, current: -2.67, hit: true, firedAt: 1,
     },
   ],
+  // 预警触发历史（宿主 GET /state 带最近 30 条，最新在前）
+  alertEvents: [
+    {
+      id: 'e2', alertId: 'al2', symbol: PINGAN, code: '000001', name: '平安银行',
+      kind: 'pct', op: '<=', value: -3, current: -2.67, at: Date.now() - 5 * 60000,
+    },
+    {
+      id: 'e1', alertId: 'al1', symbol: MAOTAI, code: '600519', name: '贵州茅台',
+      kind: 'price', op: '>=', value: 1700, current: 1704.2, at: Date.now() - 26 * 3600000,
+    },
+  ],
   market: { open: true, session: 'morning', label: '交易中', shanghai: '10:23' },
+  // 组合净值快照：一天一行，升序（最老在前）
+  equitySnapshots: [
+    { date: '2026-11-10', at: Date.parse('2026-11-10T07:00:00Z'), marketValue: 205400, costValue: 200000, pnl: 5400, pnlPct: 2.7, dayPnl: 300, positions: 3 },
+    { date: '2026-11-11', at: Date.parse('2026-11-11T07:00:00Z'), marketValue: 202800, costValue: 200000, pnl: 2800, pnlPct: 1.4, dayPnl: -2600, positions: 3 },
+    { date: '2026-11-12', at: Date.parse('2026-11-12T07:00:00Z'), marketValue: 197600, costValue: 200000, pnl: -2400, pnlPct: -1.2, dayPnl: -5200, positions: 3 },
+    { date: '2026-11-13', at: Date.parse('2026-11-13T07:00:00Z'), marketValue: 201200, costValue: 200000, pnl: 1200, pnlPct: 0.6, dayPnl: 3600, positions: 3 },
+    { date: '2026-11-17', at: Date.parse('2026-11-17T07:00:00Z'), marketValue: 208900, costValue: 200000, pnl: 8900, pnlPct: 4.45, dayPnl: 1700, positions: 3 },
+  ],
   updatedAt: Date.now(),
 };
 // 宿主返回的 items 是「每只标的一条」（按 symbol upsert），指数也在里面、靠 index 标记区分。
@@ -157,7 +176,10 @@ const BOOK = {
     { price: 1680.8, volume: 300 }, { price: 1680.9, volume: 95 },
     { price: 1681.0, volume: 175 },
   ],
-  bidVolume: 814, askVolume: 770, commissionDiff: 44, commissionRatio: 0.0278,
+  // 买卖量 814 vs 770 → 委差 44、委比 (814-770)/1584 = 2.78%。
+  // commissionRatio 是**百分数**（宿主 providers.js 已经乘过 100），不是小数 0.0278 ——
+  // 之前夹具写成小数，客户端又乘了一次 100，真实 -19.53% 显示成 -1952.59%。
+  bidVolume: 814, askVolume: 770, commissionDiff: 44, commissionRatio: 2.7778,
   provider: 'eastmoney', ts: Date.now(),
 };
 
@@ -490,8 +512,20 @@ function fakeFetch(url, init = {}) {
     const found = STATE.alerts.find((a) => a.id === patch.id);
     if (found) { found.hit = false; found.firedAt = null; }
     body = { ok: true };
+  } else if (u.includes('/alerts/history/clear')) {
+    const cleared = (STATE.alertEvents || []).length;
+    STATE.alertEvents = [];
+    body = { ok: true, cleared };
+  } else if (u.includes('/alerts/history')) {
+    body = { ok: true, events: STATE.alertEvents || [] };
   } else if (u.includes('/alerts/dismiss')) body = { ok: true };
-  else if (u.includes('/search')) body = { ok: true, hits: [] };
+  else if (u.includes('/equity/clear')) {
+    const cleared = (STATE.equitySnapshots || []).length;
+    STATE.equitySnapshots = [];
+    body = { ok: true, cleared };
+  } else if (u.includes('/equity')) {
+    body = { ok: true, snapshots: STATE.equitySnapshots || [] };
+  } else if (u.includes('/search')) body = { ok: true, hits: [] };
   else body = { ok: true };
   return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
 }
@@ -503,6 +537,10 @@ function fakeFetch(url, init = {}) {
 let drawCalls = 0;
 /** canvas 上真正落笔的文字。成本线要在图上写「成本 xxx」，只能靠这个断言。 */
 const textCalls = [];
+/** 文字的落笔位置（[文本, x, y]）。副图读数带和曲线区是否重叠要靠它判定。 */
+const textPos = [];
+/** 折线顶点（[方法名, x, y]）。用来判断副图曲线有没有画到读数带上。 */
+const lineCalls = [];
 const rectCalls = [];
 const ctxCalls = [];
 const styleTags = [];
@@ -520,7 +558,19 @@ function makeCtx2d(node) {
       if (k === 'createLinearGradient' || k === 'createRadialGradient') return () => ({ addColorStop() {} });
       if (k === 'getImageData') return () => ({ data: new Uint8ClampedArray(4) });
       if (k === 'fillText' || k === 'strokeText') {
-        return (text) => { drawCalls++; textCalls.push(String(text)); return undefined; };
+        return (text, x, y) => {
+          drawCalls++;
+          textCalls.push(String(text));
+          textPos.push([String(text), x, y]);
+          return undefined;
+        };
+      }
+      if (k === 'moveTo' || k === 'lineTo') {
+        return (x, y) => {
+          drawCalls++;
+          lineCalls.push([k, x, y]);
+          return undefined;
+        };
       }
       if (k === 'fillRect') {
         return (x, y, w, h) => { drawCalls++; rectCalls.push([x, y, w, h]); return undefined; };
@@ -798,7 +848,10 @@ function render(node, key) {
   const { type, props } = node;
 
   if (typeof type === 'function') {
-    const fiber = beginFiber(key);
+    // 真 React 里不同组件类型各有各的 fiber；这里按「路径 + 组件名」做 key，
+    // 否则 KLineChart 和 TrendChart 在同一条路径上会共用一份 hooks 数组，
+    // 两边的 hook 顺序一不一样就串位（曾经把 ref 读成 effect 槽）。
+    const fiber = beginFiber(`${key}|${type.name || type.displayName || 'anon'}`);
     const out = type(props);
     // 先取走本 fiber 的 effect，再渲染子树 —— 否则 current 会被子组件覆盖
     const mine = fiber.pending.slice();
@@ -1375,6 +1428,26 @@ section('五档盘口');
   check('盘口展示卖5', /卖5/.test(txt), null);
   check('盘口展示买1', /买1/.test(txt), null);
   check('盘口展示委比', /委比/.test(txt), null);
+  // 委比是百分数：(814-770)/1584 = 2.78%。这条专门盯「又乘了一次 100」的回归
+  check('委比按百分数显示（2.78%）', /委比\s*2\.78%/.test(txt), txt.match(/委比[^%]*%/g));
+  check('委比没有二次放大（不出现 277% / 278%）', !/委比\s*27\d(?:\.\d+)?%/.test(txt),
+    txt.match(/委比[^%]*%/g));
+  check('委比读数落在 ±100% 内', (() => {
+    const m = /委比\s*(-?\d+(?:\.\d+)?)%/.exec(txt);
+    return !!m && Math.abs(Number(m[1])) <= 100;
+  })(), txt.match(/委比[^%]*%/g));
+  {
+    // 换算关系：拿铺（买盘-卖盘）/总量 对一遍，确认显示值就是标准委比
+    const m = /委比\s*(-?\d+(?:\.\d+)?)%/.exec(txt);
+    const want = ((814 - 770) / (814 + 770)) * 100;
+    check('委比数值等于 (买-卖)/总量', !!m && Math.abs(Number(m[1]) - want) < 0.01,
+      { shown: m && m[1], want: +want.toFixed(2) });
+  }
+  check('委比带公式说明（title）', (() => {
+    const el = collect(tree).find((n) => n.props && typeof n.props.title === 'string'
+      && n.props.title.includes('委比 ='));
+    return !!el && el.props.title.includes('委差');
+  })(), null);
   check('盘口展示现价', /现价/.test(txt), null);
   // 卖盘必须倒着显示：最上面一行是卖5（宿主 asks[0] 是卖1）
   const askRows = collect(tree).filter((n) => typeof n.props.className === 'string'
@@ -1446,6 +1519,459 @@ section('K 线图');
     check('悬停时标出是哪一天', /←\s*\d{4}-\d{2}-\d{2}/.test(allText(tree)), null);
   }
 }
+
+section('K线副图指标（MACD / KDJ / RSI）');
+{
+  // 选择器：控制行里的 <select>，选项里带「无副图」的那个
+  const subSel = () => collect(tree).find((n) => n.tag === 'select'
+    && (n.kids || []).some((k) => k && k.props && k.props.value === 'none'));
+  // 上一段十字光标用例把鼠标停在了某根 K 线上，读数会跟着光标走；而指标都有预热期
+  // （MACD 26 根、KDJ 9 根、RSI24 24 根），光标停在预热期里读数就是 '--'。
+  // 先移开鼠标，让读数回到最新一根，才能断言数值本身。
+  const kCanvas = () => collect(tree).find((n) => n.tag === 'canvas'
+    && typeof n.props.onMouseLeave === 'function');
+  if (kCanvas()) {
+    kCanvas().props.onMouseLeave({ type: 'mouseleave' });
+    await settle(10);
+  }
+
+  check('控制行有副图指标选择器', !!subSel(), null);
+  check('选择器默认是 MACD', !!subSel() && subSel().props.value === 'macd',
+    subSel() && subSel().props.value);
+
+  // 副图读数画在画布上（不占 DOM 行），跟均线读数一个排版思路
+  const macdTexts = textCalls.slice(-60).map(String);
+  check('画布上标了副图名称 MACD(12,26,9)',
+    macdTexts.some((t) => t.includes('MACD(12,26,9)')), macdTexts.slice(-14));
+  check('画布上标了 DIF 读数', macdTexts.some((t) => /^DIF /.test(t)), macdTexts.slice(-14));
+  check('画布上标了 DEA 读数', macdTexts.some((t) => /^DEA /.test(t)), macdTexts.slice(-14));
+  check('画布上标了 MACD 柱读数', macdTexts.some((t) => /^MACD /.test(t)), macdTexts.slice(-14));
+  check('MACD 读数是带符号的三位小数',
+    ['DIF', 'DEA', 'MACD'].every((k) => macdTexts.some((t) => new RegExp(`^${k}\\s[+-]?\\d+\\.\\d{3}$`).test(t))),
+    macdTexts.filter((t) => /^(DIF|DEA|MACD) /.test(t)));
+
+  // 切 KDJ
+  const before = textCalls.length;
+  const beforeLines = lineCalls.length;
+  subSel().props.onChange({ target: { value: 'kdj' } });
+  await settle(12);
+  const kdjTexts = textCalls.slice(before).map(String);
+  check('切 KDJ 后副图标题变成 KDJ(9,3,3)',
+    kdjTexts.some((t) => t.includes('KDJ(9,3,3)')), kdjTexts.slice(-14));
+  const kdjVals = kdjTexts.filter((t) => /^[KDJ] /.test(t));
+  check('KDJ 有 K / D / J 三条读数',
+    ['K', 'D', 'J'].every((k) => kdjVals.some((t) => t.startsWith(`${k} `))), kdjVals);
+  check('KDJ 读数是两位小数', kdjVals.every((t) => /^[KDJ]\s\d+\.\d{2}$/.test(t)), kdjVals);
+  check('K/D 落在 0~100 区间', kdjVals.filter((t) => /^[KD] /.test(t)).every((t) => {
+    const v = Number(t.split(/\s+/)[1]);
+    return v >= 0 && v <= 100;
+  }), kdjVals);
+  check('切 KDJ 后设置里记住了 subIndicator=kdj', STATE.settings.subIndicator === 'kdj',
+    STATE.settings.subIndicator);
+
+  // 副图纵轴要按指标真实极值撑开：J = 3K - 2D 会跑出 0~100（这份夹具最高 111.57），
+  // 固定按 0~100 画就会在顶边被裁平，看起来像「没画完」。这里直接查画布坐标。
+  // 画布 320 高：副图带 max(46, 20%) = 64、成交量带 57、主图 145
+  // -> 副图顶边 240、读数带 13 -> 曲线区 253~304。
+  {
+    const SUB_TOP = 240;
+    const PLOT_TOP = 253;
+    const PLOT_BOTTOM = 304;
+    const readout = textPos.filter(([t]) => t === 'KDJ(9,3,3)').pop();
+    check('副图读数画在读数带里（顶边和曲线区之间）',
+      !!readout && readout[2] > SUB_TOP && readout[2] < PLOT_TOP, readout && readout[2]);
+    const pts = lineCalls.slice(beforeLines).map(([, x, y]) => [x, y])
+      .filter(([, y]) => y > SUB_TOP - 30 && y <= PLOT_BOTTOM + 1);
+    const minY = Math.min(...pts.map(([, y]) => y));
+    const maxY = Math.max(...pts.map(([, y]) => y));
+    check('副图区域确实画了线（取样点足够，免得空数组让下面的断言假通过）',
+      pts.length > 50, pts.length);
+    check('KDJ 曲线没有画进读数带（J 越界时纵轴撑开，峰不会被裁平）',
+      minY >= PLOT_TOP - 0.6, { minY, PLOT_TOP, pts: pts.length });
+    check('KDJ 曲线没有越过副图底边', maxY <= PLOT_BOTTOM + 0.5, { maxY, PLOT_BOTTOM });
+  }
+
+  // 切 RSI
+  const beforeRsi = textCalls.length;
+  subSel().props.onChange({ target: { value: 'rsi' } });
+  await settle(12);
+  const rsiTexts = textCalls.slice(beforeRsi).map(String);
+  check('切 RSI 后副图标题变成 RSI(6,12,24)',
+    rsiTexts.some((t) => t.includes('RSI(6,12,24)')), rsiTexts.slice(-14));
+  const rsiVals = rsiTexts.filter((t) => /^RSI\d+ /.test(t));
+  check('RSI 有 RSI6 / RSI12 / RSI24 三条读数',
+    ['RSI6', 'RSI12', 'RSI24'].every((k) => rsiVals.some((t) => t.startsWith(`${k} `))), rsiVals);
+  check('RSI 读数在 0~100 区间（不是乱数）', rsiVals.every((t) => {
+    const v = Number(t.split(/\s+/)[1]);
+    return v >= 0 && v <= 100;
+  }), rsiVals);
+
+  // 关掉副图：主图应该重新占满，副图读数消失
+  const beforeNone = textCalls.length;
+  subSel().props.onChange({ target: { value: 'none' } });
+  await settle(12);
+  const noneTexts = textCalls.slice(beforeNone).map(String);
+  check('关掉副图后不再画指标读数',
+    !noneTexts.some((t) => /^(DIF|DEA|K|D|J|RSI6)\s/.test(t)), noneTexts.slice(-14));
+  check('关掉副图后设置里是 none', STATE.settings.subIndicator === 'none', STATE.settings.subIndicator);
+  check('副图关掉时 K 线仍然画出来', noneTexts.some((t) => /^成本 /.test(t)), noneTexts.slice(-20));
+
+  // 复原成 MACD，后面的用例按默认副图继续
+  const beforeBack = textCalls.length;
+  subSel().props.onChange({ target: { value: 'macd' } });
+  await settle(12);
+  check('切回 MACD 后副图读数恢复',
+    textCalls.slice(beforeBack).some((t) => String(t).includes('MACD(12,26,9)')),
+    textCalls.slice(beforeBack).slice(-14));
+}
+
+section('K线框选放大（拖动选择时间区间）');
+{
+  const WIN = ALL_CANDLES.slice(-120);
+  const plotNode = findByClass(tree, 'dst-kline-plot')[0];
+  const plotEl = plotNode && plotNode.props.ref ? plotNode.props.ref.current : null;
+  const canvasNode = collect(tree).find((n) => n.tag === 'canvas' && typeof n.props.onMouseDown === 'function');
+  const canvasEl = canvasNode && canvasNode.props.ref ? canvasNode.props.ref.current : null;
+  check('找到 K 线画布容器', !!plotEl);
+  check('画布挂了按下回调（框选起点）', !!canvasNode);
+  const wheelListeners = plotEl && plotEl.__listeners ? plotEl.__listeners.get('wheel') || [] : [];
+  check('不再拦滚轮（滚轮还给页面滚动，缩放改用框选）', wheelListeners.length === 0, wheelListeners.length);
+  check('头部提示可以拖动框选', allText(tree).includes('拖动框选区间'), allText(tree).slice(0, 200));
+  check('没框选时显示全部根数', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+
+  // 坐标 → 下标：跟 drawChart 一致，plotW = 画布宽 720 - padL(8) - padR(52)
+  const cw0 = (720 - 8 - 52) / WIN.length;
+  const x0 = Math.round(8 + 60 * cw0);
+  const x1 = Math.round(8 + 119 * cw0);
+  const i0 = Math.floor((x0 - 8) / cw0);
+  const i1 = Math.min(WIN.length - 1, Math.floor((x1 - 8) / cw0));
+  check('框选边界正好落在第 60~119 根上', i0 === 60 && i1 === 119, { i0, i1, x0, x1, cw0 });
+
+  // 时间轴总览条：整段范围 + 当前窗口位置 + 复位按钮
+  const track = () => findByClass(tree, 'dst-timeline-track')[0];
+  const win = () => findByClass(tree, 'dst-timeline-win')[0];
+  const nowText = () => {
+    const n = findByClass(tree, 'dst-timeline-now')[0];
+    return n ? allText(n.kids) : '';
+  };
+  const allBtn = () => findByClass(tree, 'dst-timeline-all')[0];
+  const doDrag = async (a, b) => {
+    canvasNode.props.onMouseDown({ button: 0, clientX: a, clientY: 120, currentTarget: canvasEl });
+    await settle(8);
+    dispatchWindow('mousemove', { clientX: b, clientY: 120 });
+    await settle(8);
+    dispatchWindow('mouseup', { clientX: b, clientY: 120 });
+    await settle(14);
+  };
+  check('画布下面有时间轴总览条', !!track(), null);
+  check('总览条左端是最早一根的日期', allText(tree).includes(String(WIN[0].date).slice(5)),
+    allText(tree).slice(0, 240));
+  check('总览条右端是最新一根的日期', allText(tree).includes(String(WIN[WIN.length - 1].date).slice(5)),
+    allText(tree).slice(0, 240));
+  check('没放大时总览条写「全部 120 根」', nowText().includes('全部 120 根'), nowText());
+  check('没放大时窗口铺满整条（dst-full）',
+    !!win() && String(win().props.className).split(/\s+/).indexOf('dst-full') >= 0,
+    win() && win().props.className);
+  check('没放大时「全部」按钮是禁用状态',
+    !!allBtn() && allBtn().props.disabled === true,
+    allBtn() && allBtn().props.disabled);
+
+  // 按下：出现选框，宽度 1px
+  let downErr = null;
+  try {
+    canvasNode.props.onMouseDown({ button: 0, clientX: x0, clientY: 120, currentTarget: canvasEl });
+  } catch (e) { downErr = e; }
+  check('按下不抛错', downErr === null, downErr && downErr.message);
+  await settle(10);
+  const selNodes = findByClass(tree, 'dst-kline-sel');
+  check('拖拽时画出一层选框', selNodes.length === 1, selNodes.length);
+  check('选框刚按下时只有 1px 宽',
+    selNodes.length === 1 && String(selNodes[0].props.style.width) === '1px',
+    selNodes.length === 1 ? selNodes[0].props.style : null);
+
+  // 拖动到另一头（挂 window 上，拖出画布也跟手）
+  dispatchWindow('mousemove', { clientX: x1, clientY: 120 });
+  await settle(10);
+  const selWide = findByClass(tree, 'dst-kline-sel')[0];
+  check('选框跟着鼠标变宽',
+    !!selWide && Number.parseFloat(String(selWide.props.style.width)) > 300,
+    selWide && selWide.props.style);
+
+  // 松手：区间生效
+  dispatchWindow('mouseup', { clientX: x1, clientY: 120 });
+  await settle(14);
+  check('松手后选框收回', findByClass(tree, 'dst-kline-sel').length === 0, null);
+  check('松手后放大到框选的区间（60 根）', allText(tree).includes('区间 60 根'), allText(tree).slice(0, 200));
+  check('放大后不再显示「共 120 根」', !allText(tree).includes('共 120 根'), null);
+
+  // 总览条应该把「整段 120 根、现在只看后 60 根」画出来
+  check('放大后窗口缩到一半（左 50% / 宽 50%）',
+    !!win() && String(win().props.style.left) === '50%' && String(win().props.style.width) === '50%',
+    win() && win().props.style);
+  check('放大后窗口不再是铺满状态',
+    !!win() && String(win().props.className).split(/\s+/).indexOf('dst-full') < 0,
+    win() && win().props.className);
+  check('放大后总览条写明选中的是哪一段',
+    nowText().includes(`${String(WIN[i0].date).slice(5)} ~ ${String(WIN[i1].date).slice(5)}`),
+    nowText());
+  check('放大后总览条写明选中了多少 / 共多少根', nowText().includes('60/120 根'), nowText());
+  check('放大后「全部」按钮可点',
+    !!allBtn() && allBtn().props.disabled !== true, allBtn() && allBtn().props.disabled);
+
+  // 选区左端往右一格：十字光标应该落在整段的第 60 根上（下标换算没串）
+  const cw1 = (720 - 8 - 52) / (i1 - i0 + 1);
+  canvasNode.props.onMouseMove({ clientX: 8 + cw1 * 0.5, clientY: 120, currentTarget: canvasEl });
+  await settle(10);
+  check('放大后十字光标落在选区第一根（日期对得上）',
+    allText(tree).includes(String(WIN[i0].date)), allText(tree).slice(0, 220));
+  const ma60 = findByClass(tree, 'dst-legend-item').map((n) => allText(n.kids)).find((t) => t.includes('MA60'));
+  check('选区内均线仍然有值（均线按整段算再切片）', !!ma60 && !/\s--$/.test(ma60.trim()), ma60);
+  canvasNode.props.onMouseLeave({ type: 'mouseleave' });
+  await settle(8);
+
+  // 点窗口里的位置不该把刚框好的区间点没了
+  track().props.onClick({
+    clientX: 300,
+    currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 400 }) },
+  });
+  await settle(12);
+  check('点窗口内部不改变区间', allText(tree).includes('区间 60 根'), allText(tree).slice(0, 200));
+
+  // 点总览条上窗口外面的空白 = 回到全部
+  track().props.onClick({
+    clientX: 40,
+    currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 400 }) },
+  });
+  await settle(14);
+  check('点总览条空白处回到全部', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+  check('复位后总览条重新铺满', !!win() && String(win().props.className).includes('dst-full'),
+    win() && win().props.className);
+  check('复位后「全部」按钮又变灰', !!allBtn() && allBtn().props.disabled === true,
+    allBtn() && allBtn().props.disabled);
+
+  // 「全部」按钮复位
+  await doDrag(x0, x1);
+  check('再框一次还是 60 根', allText(tree).includes('区间 60 根'), allText(tree).slice(0, 200));
+  let allErr = null;
+  try { allBtn().props.onClick({}); } catch (e) { allErr = e; }
+  check('「全部」按钮点了不抛错', allErr === null, allErr && allErr.message);
+  await settle(14);
+  check('「全部」按钮回到全部 120 根', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+
+  // 双击复位
+  await doDrag(x0, x1);
+  let resetErr = null;
+  try { plotNode.props.onDoubleClick({}); } catch (e) { resetErr = e; }
+  check('双击复位不抛错', resetErr === null, resetErr && resetErr.message);
+  await settle(14);
+  check('双击后回到全部 120 根', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+
+  // 太窄的拖动当点击，不改区间
+  canvasNode.props.onMouseDown({ button: 0, clientX: 300, clientY: 120, currentTarget: canvasEl });
+  await settle(8);
+  dispatchWindow('mouseup', { clientX: 304, clientY: 120 });
+  await settle(12);
+  check('拖动不到 8px 当点击，不改区间', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+
+  // 右键按下不开始框选
+  canvasNode.props.onMouseDown({ button: 2, clientX: 200, clientY: 120, currentTarget: canvasEl });
+  await settle(8);
+  check('右键不触发框选', findByClass(tree, 'dst-kline-sel').length === 0, null);
+}
+
+section('时间轴颗粒度调整（拖总览条上的窗口）');
+{
+  // 假 DOM 的 getBoundingClientRect 给的宽度是 720，120 根 → 1 根 = 6px
+  const WIN = ALL_CANDLES.slice(-120);
+  const PX_PER_BAR = 720 / 120;
+  const grips = () => findByClass(tree, 'dst-timeline-grip');
+  const trackNode = () => findByClass(tree, 'dst-timeline-track')[0];
+  const winNow = () => findByClass(tree, 'dst-timeline-win')[0];
+  const nowText = () => {
+    const n = findByClass(tree, 'dst-timeline-now')[0];
+    return n ? allText(n.kids) : '';
+  };
+  const dayOf = (i) => String(WIN[i].date).slice(5);
+  // 拖某个元素（手柄/窗口）横向移动 dx 像素
+  const dragBy = async (node, from, dx) => {
+    node.props.onMouseDown({ button: 0, clientX: from });
+    await settle(8);
+    dispatchWindow('mousemove', { clientX: from + dx });
+    await settle(8);
+    dispatchWindow('mouseup', { clientX: from + dx });
+    await settle(12);
+  };
+
+  check('总览条上有左右两个手柄', grips().length === 2, grips().length);
+  check('没放大时手柄也在（可以拖出范围）',
+    grips().length === 2 && nowText().includes('全部 120 根'), nowText());
+
+  // 拖右手柄往左 30 根：120 → 90 根（颗粒度变细）
+  await dragBy(grips()[1], 700, -30 * PX_PER_BAR);
+  check('拖右手柄把范围收到 90 根', nowText().includes('90/120 根'), nowText());
+  check('右手柄拖完右端落在第 90 根', nowText().includes(dayOf(89)), nowText());
+  check('拖完窗口缩到 75%', String(winNow().props.style.width) === '75%', winNow().props.style);
+
+  // 再拖左手柄往右 30 根：90 → 60 根
+  await dragBy(grips()[0], 200, 30 * PX_PER_BAR);
+  check('拖左手柄把范围再收到 60 根', nowText().includes('60/120 根'), nowText());
+  check('左手柄拖完左端落在第 30 根', nowText().includes(dayOf(30)), nowText());
+  check('窗口变成中间那一段（左 25% / 宽 50%）',
+    String(winNow().props.style.left) === '25%' && String(winNow().props.style.width) === '50%',
+    winNow().props.style);
+
+  // 拖窗口中间平移：根数不变，位置往左挪 20 根
+  await dragBy(winNow(), 400, -20 * PX_PER_BAR);
+  check('拖中间平移不改根数', nowText().includes('60/120 根'), nowText());
+  check('拖中间平移后左端是第 10 根', nowText().includes(dayOf(10)), nowText());
+  check('平移后窗口位置跟着走到 8.3%',
+    Math.abs(parseFloat(winNow().props.style.left) - (10 / 120) * 100) < 0.05,
+    winNow().props.style);
+
+  // 一路往右拖到底：右端夹在最后一根，不会跑出去
+  await dragBy(grips()[1], 500, 400 * PX_PER_BAR);
+  check('右手柄拖到最右端被夹住', nowText().includes(dayOf(119)), nowText());
+  check('拖过头也不会超出整段（不超过 120 根）', nowText().includes('110/120 根'), nowText());
+
+  // 再一路往左拖到底：起点夹到 0，回满就是「全部」
+  await dragBy(grips()[0], 300, -400 * PX_PER_BAR);
+  check('两头都拖到边就自动回到全部', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+  check('回满后窗口重新铺满整条',
+    !!winNow() && String(winNow().props.className).includes('dst-full'), winNow().props.className);
+
+  // 拖完紧跟的那次 click 是拖拽余波，不能把刚调好的区间复位掉
+  await dragBy(grips()[1], 700, -60 * PX_PER_BAR);
+  check('再收到 60 根', nowText().includes('60/120 根'), nowText());
+  trackNode().props.onClick({
+    clientX: 620,
+    currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 720 }) },
+  });
+  await settle(12);
+  check('拖完紧跟的 click 不会复位刚拖好的区间',
+    allText(tree).includes('区间 60 根'), allText(tree).slice(0, 200));
+  // 下一次正经点在窗口外面的空白，才是「回到全部」
+  trackNode().props.onClick({
+    clientX: 620,
+    currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 720 }) },
+  });
+  await settle(12);
+  check('再点一次窗口外面才回到全部', allText(tree).includes('共 120 根'), allText(tree).slice(0, 200));
+
+  // 手柄/窗口上按下右键不做任何事
+  const beforeRight = nowText();
+  grips()[1].props.onMouseDown({ button: 2, clientX: 700 });
+  await settle(8);
+  dispatchWindow('mousemove', { clientX: 500 });
+  dispatchWindow('mouseup', { clientX: 500 });
+  await settle(10);
+  check('右键拖手柄不改区间', nowText() === beforeRight, { before: beforeRight, after: nowText() });
+}
+
+section('时间轴：带年份 + 拖动跟手 + 跨年日期轴');
+{
+  const WIN = ALL_CANDLES.slice(-120);
+  const rows = () => findByClass(tree, 'dst-timeline-row');
+  const caps = () => findByClass(tree, 'dst-timeline-cap');
+  const winNow = () => findByClass(tree, 'dst-timeline-win')[0];
+  const winStyle = () => (winNow() ? winNow().props.style : {});
+  const nowText = () => {
+    const n = findByClass(tree, 'dst-timeline-now')[0];
+    return n ? allText(n.kids) : '';
+  };
+
+  // 一年以内的日期只有「08-02」，看不出是哪年 —— 两端都必须写全年份
+  const capTexts = caps().map((n) => allText(n.kids));
+  check('总览条两端日期带年份', capTexts.length === 2 && capTexts.every((t) => /^\d{4}-\d{2}-\d{2}$/.test(t)), capTexts);
+  check('左端是最早一根的全年日期', capTexts[0] === String(WIN[0].date).slice(0, 10), { got: capTexts[0], want: WIN[0].date });
+  check('右端是最新一根的全年日期', capTexts[1] === String(WIN[119].date).slice(0, 10), { got: capTexts[1], want: WIN[119].date });
+  // 排两行：上行日期+轨道，下行区间文案+「全部」，窄面板也不会把右边挤出去
+  check('总览条拆成两行', rows().length === 2, rows().map((n) => allText(n.kids).slice(0, 40)));
+  check('第一行含轨道、第二行含「全部」按钮',
+    findByClass(rows()[0].kids, 'dst-timeline-track').length === 1
+      && findByClass(rows()[1].kids, 'dst-timeline-all').length === 1, null);
+
+  // 拖动跟手：一根 = 6px，这里一次只挪 3px，窗口必须跟着动 1px 级，
+  // 不能按「第几根」取整（旧实现要攒够 6px 才跳一格，看着一顿一顿的）
+  check('没放大时窗口用百分比定位', /%$/.test(String(winStyle().width)), winStyle());
+  check('静止时窗口有短过渡（复位不硬跳）', String(winStyle().transition || '').includes('.16s'), winStyle());
+  const grips = () => findByClass(tree, 'dst-timeline-grip');
+  grips()[1].props.onMouseDown({ button: 0, clientX: 700 });
+  await settle(8);
+  dispatchWindow('mousemove', { clientX: 697 });
+  await settle(8);
+  const s1 = winStyle();
+  dispatchWindow('mousemove', { clientX: 694 });
+  await settle(8);
+  const s2 = winStyle();
+  check('拖动中窗口改成像素定位', /px$/.test(String(s1.width)), s1);
+  check('拖动中窗口没有过渡动画（跟手优先）', s1.transition === 'none', s1);
+  check('挪 3px 窗口就缩 3px（不取整到根）', String(s1.width) === '717px', s1);
+  check('再挪 3px 又缩 3px（连续跟手）', String(s2.width) === '714px', s2);
+  dispatchWindow('mouseup', { clientX: 694 });
+  await settle(12);
+  check('松手后窗口回百分比定位', /%$/.test(String(winStyle().width)), winStyle());
+  check('松手后恢复过渡动画', String(winStyle().transition || '').includes('.16s'), winStyle());
+  // 收窄了 6px（一根），右端被裁掉 1 根
+  check('拖动确实改了区间', nowText().includes('119/120 根'), nowText());
+  findByClass(tree, 'dst-timeline-all')[0].props.onClick({});
+  await settle(12);
+  check('「全部」回到 120 根', allText(tree).includes('共 120 根'), allText(tree).slice(0, 160));
+
+  // 轨道高度和手柄尺寸（12px 高的轨道配 8px 手柄太细，抓不准就误触成「点空白」）
+  const css = styleTags[0] ? styleTags[0].textContent : '';
+  const cssRule = (sel) => {
+    const m = new RegExp(`${sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\{([^}]*)\\}`).exec(css);
+    return m ? m[1] : '';
+  };
+  const trackCss = cssRule('.dst-timeline-track');
+  const gripCss = cssRule('.dst-timeline-grip');
+  check('轨道做高了（20px）', /height:20px/.test(trackCss), trackCss);
+  check('轨道够宽（flex 撑满剩余空间）', /flex:1 1 120px/.test(trackCss), trackCss);
+  check('手柄加宽到 12px', /width:12px/.test(gripCss), gripCss);
+  check('手柄上下探出轨道（拖拽区 30px 高）',
+    /top:-5px/.test(gripCss) && /bottom:-5px/.test(gripCss), gripCss);
+  check('两行之间留了间距', /gap:4px/.test(cssRule('.dst-timeline')), cssRule('.dst-timeline'));
+
+  // 误触保护：手柄抓偏一点落在窗边外面，不能当成「点空白回到全部」
+  const PX_PER_BAR = 720 / 120;
+  const trackNode = () => findByClass(tree, 'dst-timeline-track')[0];
+  const trackClick = async (clientX) => {
+    trackNode().props.onClick({
+      clientX,
+      currentTarget: { getBoundingClientRect: () => ({ left: 0, width: 720 }) },
+    });
+    await settle(10);
+  };
+  const grips2 = () => findByClass(tree, 'dst-timeline-grip');
+  grips2()[0].props.onMouseDown({ button: 0, clientX: 0 });
+  await settle(8);
+  dispatchWindow('mousemove', { clientX: 30 * PX_PER_BAR });
+  await settle(8);
+  dispatchWindow('mouseup', { clientX: 30 * PX_PER_BAR });
+  await settle(12);
+  check('拖左手柄收到最后 90 根', nowText().includes('90/120 根'), nowText());
+  await trackClick(500); // 先吃掉拖拽余波那次 click（此时窗口 180~720，500 落在窗内）
+  check('吃掉拖拽余波后区间不变', nowText().includes('90/120 根'), nowText());
+  await trackClick(172); // 窗口左边 180，落在外侧 8px
+  check('窗边外 8px 的误点不清区间', nowText().includes('90/120 根'), nowText());
+  await trackClick(140); // 外側 40px，这才是真的点空白
+  check('离窗口足够远才回全部', allText(tree).includes('共 120 根'), allText(tree).slice(0, 160));
+
+  // 日期轴：同年之内只写「MM-DD」，跨年时每年第一根把年份写全
+  const axisFull = () => textCalls.slice(-160).filter((t) => /^\d{4}-\d{2}-\d{2}$/.test(t));
+  check('同年区间日期轴不写年份', axisFull().length === 0, axisFull());
+  // 点三次「更多历史」把 120 根拉到 480 根，跨度跨年
+  for (let i = 0; i < 3; i++) {
+    clickText('更多历史');
+    await settle(10);
+  }
+  check('更多历史把根数加到 480', allText(tree).includes('共 480 根'), allText(tree).slice(0, 160));
+  const yr = String(WIN[0].date).slice(0, 4);
+  check('跨年后日期轴写出完整年份',
+    axisFull().some((t) => t.slice(0, 4) === yr) || axisFull().length > 0, axisFull());
+  check('跨年后仍保留 MM-DD 的刻度', textCalls.slice(-160).some((t) => /^\d{2}-\d{2}$/.test(t)), textCalls.slice(-12));
+}
+
 
 section('成本线（持仓时画在图上）');
 {
@@ -1580,6 +2106,85 @@ section('价格预警');
   }
 }
 
+section('预警触发历史');
+{
+  const histBtn = () => collect(tree).find((n) => n.tag === 'button'
+    && String(n.props.title || '').includes('展开/收起触发记录'));
+  check('预警页有触发历史入口', !!histBtn(), null);
+  check('入口上带记录条数',
+    !!histBtn() && /触发历史 \(2\)/.test(allText(histBtn().kids)),
+    histBtn() && allText(histBtn().kids));
+
+  check('默认收起（不占地方）', findByClass(tree, 'dst-history-table').length === 0);
+  histBtn().props.onClick({});
+  await settle(10);
+
+  const tbl = findByClass(tree, 'dst-history-table')[0];
+  check('展开后出现历史表', !!tbl, findByClass(tree, 'dst-history-table').length);
+  const htxt = tbl ? allText(tbl) : '';
+  check('历史表列出触发过的标的', /平安银行/.test(htxt) && /贵州茅台/.test(htxt), htxt);
+  check('历史表显示触发时的条件', /涨跌幅 <= -3%/.test(htxt) && /价格 >= 1700/.test(htxt), htxt);
+  check('历史表显示触发时的价格', /-2\.67%/.test(htxt) && /1,704\.20/.test(htxt), htxt);
+  check('当天记录写成「今天 HH:MM」', /今天 \d{2}:\d{2}/.test(htxt), htxt);
+  check('跨天记录写成「MM-DD HH:MM」', /\d{2}-\d{2} \d{2}:\d{2}/.test(htxt), htxt);
+
+  const clearBtn = collect(tree).find((n) => n.tag === 'button'
+    && String(n.props.title || '').includes('清空所有触发记录'));
+  check('有清空历史按钮', !!clearBtn, null);
+  if (clearBtn) {
+    let e = null;
+    try { clearBtn.props.onClick({}); } catch (err) { e = err; }
+    await settle(12);
+    check('清空不抛错', e === null, e && e.message);
+    check('清空请求已发出', fetchLog.some((u) => u.includes('/alerts/history/clear')), null);
+    check('清空后提示没有记录', /还没有触发记录/.test(allText(tree)), allText(tree).slice(-80));
+  }
+
+  // 收起，后面的用例按稳定布局继续
+  if (histBtn()) { histBtn().props.onClick({}); await settle(8); }
+}
+
+section('组合收益曲线');
+{
+  check('切回持仓页', clickText('持仓'));
+  await settle(10);
+
+  const eqBtn = () => collect(tree).find((n) => n.tag === 'button'
+    && String(n.props.title || '').includes('展开/收起收益曲线'));
+  check('持仓页有收益曲线入口', !!eqBtn(), null);
+  check('默认收起且不发请求', !fetchLog.some((u) => u.includes('/equity')), null);
+
+  eqBtn().props.onClick({});
+  await settle(14);
+  check('展开后去拉净值', fetchLog.some((u) => u.includes('/equity')), null);
+
+  const etxt = allText(tree);
+  check('显示记录了几天', /共 5 天/.test(etxt), etxt.slice(-120));
+  check('显示区间收益', /区间 \+1\.75%/.test(etxt), etxt.slice(-120));
+  check('显示最大回撤', /最大回撤 3\.9%/.test(etxt), etxt.slice(-120));
+  check('显示当前盈亏率', /当前 \+4\.45%/.test(etxt), etxt.slice(-120));
+
+  const drawn = textCalls.slice(-40);
+  check('曲线标了起止日期', drawn.some((t) => t === '11-10') && drawn.some((t) => t === '11-17'), drawn);
+  check('曲线标了盈亏率刻度', drawn.some((t) => /^4\.45%$/.test(t)) || drawn.some((t) => /%$/.test(t)), drawn);
+
+  const clearEq = collect(tree).find((n) => n.tag === 'button'
+    && String(n.props.title || '').includes('清空净值历史'));
+  check('有清空净值按钮', !!clearEq, null);
+  if (clearEq) {
+    clearEq.props.onClick({});
+    await settle(12);
+    check('清空请求已发出', fetchLog.some((u) => u.includes('/equity/clear')), null);
+    check('清空后提示还没有记录', /还没有净值记录/.test(allText(tree)), allText(tree).slice(-80));
+  }
+
+  // 收起，切回预警页，后面的用例按原来的顺序继续
+  eqBtn().props.onClick({});
+  await settle(8);
+  check('切回预警页', clickText('预警'));
+  await settle(8);
+}
+
 section('预警弹窗提示');
 {
   STATE.fired = [{
@@ -1683,6 +2288,25 @@ section('旧宿主不认新设置项时的提示');
   check('再点回来', toggleRow('AI 自动跟踪'));
   await settle(12);
   check('自动跟踪开关恢复', STATE.settings.autoTrackEnabled === true, STATE.settings.autoTrackEnabled);
+
+  // 盘前计划：默认关闭，打开后写回设置；时间点非法由宿主兜底
+  check('设置页有盘前计划开关与时间', allText(tree).includes('盘前计划')
+    && allText(tree).includes('盘前时间'), null);
+  check('盘前计划默认关闭', STATE.settings.autoPlanEnabled !== true, STATE.settings.autoPlanEnabled);
+  check('打开盘前计划', toggleRow('盘前计划'));
+  await settle(12);
+  check('盘前计划写回设置', STATE.settings.autoPlanEnabled === true, STATE.settings.autoPlanEnabled);
+  const planTimeInput = collect(tree).find((n) => n.tag === 'input'
+    && String(n.props.placeholder || '') === '09:20');
+  check('盘前时间可编辑', !!planTimeInput, null);
+  if (planTimeInput) {
+    planTimeInput.props.onChange({ target: { value: '09:15' } });
+    await settle(12);
+    check('盘前时间写回设置', STATE.settings.autoPlanTime === '09:15', STATE.settings.autoPlanTime);
+  }
+  check('再点一次关闭盘前计划', toggleRow('盘前计划'));
+  await settle(12);
+  check('盘前计划恢复关闭', STATE.settings.autoPlanEnabled === false, STATE.settings.autoPlanEnabled);
   const before = STATE.settings.showKline;
   DROP_UNKNOWN_SETTINGS = true; // 宿主装的是旧版本，showKline 这个键它不认识
   check('点一下「K线图」的开关', toggleRow('K线图'));

@@ -10,11 +10,11 @@ A stock ticker strip pinned to the top of the DSH window: quotes, holdings, char
 ## Features
 
 - **Ticker strip** — live price and change for watchlist and holdings, scrolling marquee (mouse wheel works too), limit-up/down badges, collapses into a small pill in the title bar; the `⋮⋮` grip on the left **drags the whole strip anywhere** (position is remembered as a percentage of the window, so it stays put across monitors and resizes; double-click the grip to reset)
-- **Charts** — intraday (1/3/5 day, with a top-left read-out for price and average price) and candlesticks (day/week/month/minute) with MA5/10/20/30/60 (price read-outs in the chart's top-left corner plus matching tags on the right axis, both following the crosshair), volume, crosshair, and a cost line
-- **Order book** — 5 levels each side + bid/ask imbalance
-- **Holdings** — shares, cost price, market value, floating and daily P&L (split per currency)
+- **Charts** — intraday (1/3/5 day, with a top-left read-out for price and average price) and candlesticks (day/week/month/minute) with MA5/10/20/30/60 (price read-outs in the chart's top-left corner plus matching tags on the right axis, both following the crosshair), volume, crosshair, and a cost line; the sub-pane switches between **MACD / KDJ / RSI** with read-outs following the crosshair; **drag left-to-right on the candles to zoom into that slice of the timeline** — the overview bar under the chart (both ends labelled with the full year) shows the full range and the current window, **drag the window's edges to change the granularity or its middle to pan** (pixel-accurate, widened to avoid mis-clicks), click outside it or hit “All” to reset
+- **Order book** — 5 levels each side + bid/ask imbalance (a percentage; hover for the formula, both sides' totals and the difference)
+- **Holdings** — shares, cost price, market value, floating and daily P&L (split per currency); an **equity curve** records the portfolio value once a day (plotted as floating P&L %, with period return and max drawdown)
 - **Ledger** — trade history, weighted-average cost, realized P&L
-- **Alerts** — price or percentage thresholds with a toast
+- **Alerts** — price or percentage thresholds with a toast; **every trigger is kept in a history table** (time / name / condition / price, clearable)
 - **AI review** — uses the models already configured in DSH (provider → model picker), streamed output
 - **Sidebar page (optional)** — with [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) installed, the same panel also opens as a "股票" tab in the right sidebar, sharing holdings and settings with the top strip; polling pauses while the tab is hidden
 
@@ -46,12 +46,12 @@ With `dsh-better-sidebar` installed, a "股票" tab also appears in the right si
 
 ```bash
 node scripts/verify.mjs           # host, 336 assertions
-node scripts/verify-client.mjs    # client rendering, 391 assertions
+node scripts/verify-client.mjs    # client rendering, 580 assertions
 node scripts/verify-live.mjs      # real HTTP end-to-end, 180 assertions
 node scripts/verify-analysis.mjs  # AI data pack, 151 assertions
 ```
 
-1058 assertions in total; none of them need DSH or any API key.
+1150 assertions in total; none of them need DSH or any API key.
 
 ## Notes
 

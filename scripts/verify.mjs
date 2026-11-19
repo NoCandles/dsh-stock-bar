@@ -196,7 +196,8 @@ const ROUTE_LIST = [
   '/state', '/kline', '/trends', '/orderbook', '/search', '/trades', '/health',
   '/items/save', '/items/remove', '/settings/save',
   '/trades/save', '/trades/remove', '/trades/clear', '/trades/apply',
-  '/alerts/save', '/alerts/remove', '/alerts/ack',
+  '/alerts/save', '/alerts/remove', '/alerts/ack', '/alerts/history', '/alerts/history/clear',
+  '/equity', '/equity/clear',
   '/ai/models', '/ai/analyze',
   '/ai/history', '/ai/history/get', '/ai/history/remove', '/ai/history/clear', '/ai/chat', '/ai/verdict', '/ai/plan',
 ];
@@ -276,6 +277,88 @@ section('POST /settings/save');
   check('时间点全非法时回落到默认值', r5.json.settings.autoTrackTimes === '09:35,10:30,11:30,13:35,14:30,15:05',
     r5.json.settings.autoTrackTimes);
   await call(ctx, '/settings/save', { method: 'POST', body: { refreshMs: 5000, scroll: true } });
+}
+
+section('盘前计划设置');
+{
+  const r = await call(ctx, '/state');
+  check('盘前计划默认关闭', r.json.settings.autoPlanEnabled === false, r.json.settings.autoPlanEnabled);
+  check('盘前时间默认 09:20', r.json.settings.autoPlanTime === '09:20', r.json.settings.autoPlanTime);
+
+  const r1 = await call(ctx, '/settings/save', {
+    method: 'POST', body: { autoPlanEnabled: true, autoPlanTime: '09:15' },
+  });
+  check('可以打开盘前计划', r1.json.settings.autoPlanEnabled === true, r1.json.settings.autoPlanEnabled);
+  check('盘前时间可设置', r1.json.settings.autoPlanTime === '09:15', r1.json.settings.autoPlanTime);
+
+  const bad = ['25:00', '9:5', 'abc', ''];
+  let badOk = true;
+  let badDetail = '';
+  for (const v of bad) {
+    const rb = await call(ctx, '/settings/save', { method: 'POST', body: { autoPlanTime: v } });
+    if (rb.json.settings.autoPlanTime !== '09:20') { badOk = false; badDetail = `${v} -> ${rb.json.settings.autoPlanTime}`; break; }
+  }
+  check('非法时间回落 09:20', badOk, badDetail);
+
+  await call(ctx, '/settings/save', { method: 'POST', body: { autoPlanEnabled: false, autoPlanTime: '09:20' } });
+}
+
+section('组合净值快照');
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-equity-'));
+  const file = path.join(dir, 'portfolio.json');
+  const { PortfolioStore } = await import('../lib/store.js');
+  const s = new PortfolioStore(file);
+  await s.load();
+
+  const a = await s.recordEquitySnapshot({
+    date: '2026-11-10', marketValue: 205400, costValue: 200000, dayPnl: 300, positions: 3,
+  });
+  check('能记一天净值', !!a && a.pnl === 5400 && a.pnlPct === 2.7, a);
+  await s.recordEquitySnapshot({
+    date: '2026-11-11', marketValue: 197600, costValue: 200000, dayPnl: -5200, positions: 3,
+  });
+  await s.recordEquitySnapshot({
+    date: '2026-11-11', marketValue: 201200, costValue: 200000, dayPnl: 3600, positions: 3,
+  });
+  const list = await s.listEquitySnapshots(10);
+  check('一天只留一行', list.length === 2, list.map((x) => x.date));
+  check('按日期升序', list[0].date === '2026-11-10' && list[1].date === '2026-11-11', list.map((x) => x.date));
+  check('同一天覆盖成最后一次的值', list[1].marketValue === 201200 && list[1].pnl === 1200, list[1]);
+
+  const skipped = await s.recordEquitySnapshot({ date: '2026-11-12', marketValue: 0, costValue: 0 });
+  check('空仓不记点', skipped === null, skipped);
+
+  check('清空返回条数', (await s.clearEquitySnapshots()) === 2, null);
+  check('清空后为空', (await s.listEquitySnapshots()).length === 0);
+
+  // 落地再读一遍：老库没有 equitySnapshots 也要补成空数组，坏的日期/数字要丢掉
+  {
+    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-equity2-'));
+    const f2 = path.join(dir2, 'portfolio.json');
+    fs.writeFileSync(f2, JSON.stringify({
+      version: 1,
+      settings: {},
+      items: [],
+      equitySnapshots: [
+        { date: '2026-11-01', marketValue: 100, costValue: 90, pnl: 10, pnlPct: 11.1 },
+        { date: '11-02', marketValue: 100, costValue: 90 },
+        { date: '2026-11-03', marketValue: 'x', costValue: 90 },
+        { date: '2026-11-01', marketValue: 999, costValue: 900 },
+      ],
+    }, null, 2));
+    const s2 = new PortfolioStore(f2);
+    await s2.load();
+    const rows = await s2.listEquitySnapshots(10);
+    check('坏行被丢掉、重复日期只留一条', rows.length === 1 && rows[0].date === '2026-11-01', rows);
+  }
+
+  const r = await call(ctx, '/equity?limit=10');
+  check('GET /equity 返回快照数组', r.json.ok === true && Array.isArray(r.json.snapshots), r.json);
+  const rc = await call(ctx, '/equity/clear', { method: 'GET' });
+  check('清空净值只接受 POST', rc.json.ok === false, rc.json);
+  const rc2 = await call(ctx, '/equity/clear', { method: 'POST' });
+  check('清空净值返回 cleared 数字', rc2.json.ok === true && typeof rc2.json.cleared === 'number', rc2.json);
 }
 
 if (!OFFLINE) {
@@ -565,6 +648,19 @@ if (!OFFLINE) {
   const st2 = await call(ctx, '/state');
   check('已触发的预警不再重复进 fired', st2.json.fired.length === 0, st2.json.fired);
 
+  // 触发历史：命中一次落一条，客户端「触发历史」表就读这个
+  const hist = await call(ctx, '/alerts/history?limit=20');
+  check('GET /alerts/history 返回事件数组', hist.json.ok === true && Array.isArray(hist.json.events), hist.json);
+  const ev = (hist.json.events || []).find((e) => e.symbol === px.symbol);
+  check('触发后历史里有一条记录', !!ev, (hist.json.events || []).slice(0, 3));
+  check('历史记录带条件阈值', ev && ev.value === 0.01 && ev.op === '>=' && ev.kind === 'price', ev);
+  check('历史记录带触发时价格', ev && typeof ev.current === 'number' && ev.current > 0, ev && ev.current);
+  check('历史记录带触发时间', ev && Number.isFinite(ev.at) && ev.at > 0, ev && ev.at);
+  check('历史记录带标的名称', ev && !!ev.name && !!ev.code, ev && { name: ev.name, code: ev.code });
+  check('/state 也带最近触发记录',
+    Array.isArray(st.json.alertEvents) && st.json.alertEvents.length > 0,
+    st.json.alertEvents && st.json.alertEvents.length);
+
   const ack = await call(ctx, '/alerts/ack', { method: 'POST', body: { id: a1.json.alert.id } });
   check('ack 成功', ack.json.ok === true, ack.json);
   const st3 = await call(ctx, '/state');
@@ -605,6 +701,36 @@ if (!OFFLINE) {
   check('重复删除不报错', rmAgain.json.ok === true && rmAgain.json.removed === false, rmAgain.json);
   const ackBad = await call(ctx, '/alerts/ack', { method: 'POST', body: { id: 'no-such-id' } });
   check('ack 不存在的 id 返回 ok:false', ackBad.json.ok === false, ackBad.json);
+
+  // 历史只增不清会一直长，得能手工清空
+  const hist2 = await call(ctx, '/alerts/history?limit=20');
+  check('ack 后重新触发会追加历史',
+    (hist2.json.events || []).length > (hist.json.events || []).length,
+    { before: (hist.json.events || []).length, after: (hist2.json.events || []).length });
+  check('历史按时间倒序（最新在前）', (() => {
+    const evs = hist2.json.events || [];
+    for (let i = 1; i < evs.length; i++) if (evs[i].at > evs[i - 1].at) return false;
+    return true;
+  })(), (hist2.json.events || []).map((e) => e.at));
+
+  const clr = await call(ctx, '/alerts/history/clear', { method: 'POST', body: {} });
+  check('清空触发历史返回条数', clr.json.ok === true && clr.json.cleared >= 1, clr.json);
+  const hist3 = await call(ctx, '/alerts/history');
+  check('清空后历史为空', hist3.json.ok === true && hist3.json.events.length === 0, hist3.json.events);
+}
+
+section('预警触发历史接口（离线也能用）');
+{
+  const h = await call(ctx, '/alerts/history?limit=10');
+  check('GET /alerts/history 离线可用', h.json.ok === true && Array.isArray(h.json.events), h.json);
+  const st = await call(ctx, '/state');
+  check('/state 带 alertEvents 数组', Array.isArray(st.json.alertEvents), typeof st.json.alertEvents);
+  const guard = await call(ctx, '/alerts/history/clear');
+  check('清空接口只接受 POST', guard.json.ok === false, guard.json);
+  const c = await call(ctx, '/alerts/history/clear', { method: 'POST', body: {} });
+  check('清空接口返回 cleared 数字', c.json.ok === true && typeof c.json.cleared === 'number', c.json);
+  const g = await call(ctx, '/alerts/history');
+  check('清空后历史为空', g.json.ok === true && g.json.events.length === 0, g.json.events);
 }
 
 section('预警盯非自选股时也能取到行情');

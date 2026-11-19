@@ -25,6 +25,10 @@ POST /api/stock-bar/trades/apply     按流水反推持仓（覆盖股数与成�
 POST /api/stock-bar/alerts/save      加/改预警，响应直接带 hit 与 current
 POST /api/stock-bar/alerts/remove    删预警
 POST /api/stock-bar/alerts/ack       确认触发（重新武装）
+GET  /api/stock-bar/alerts/history   预警触发历史（最新在前，?limit=50）
+POST /api/stock-bar/alerts/history/clear 清空触发历史
+GET  /api/stock-bar/equity           组合净值曲线（一天一行，升序，?limit=120）
+POST /api/stock-bar/equity/clear     清空净值历史
 GET  /api/stock-bar/ai/models        dsh-llm 里的供应商与模型目录 + 当前选择
 POST /api/stock-bar/ai/analyze       AI 分析：取数→组装数据包→调模型，NDJSON 流式回传
 GET  /api/stock-bar/ai/history       AI 分析历史列表（摘要，不含全文）

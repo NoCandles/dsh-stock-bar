@@ -312,6 +312,11 @@ section('GET /orderbook（新增：五档）');
   check('买1 不高于现价', (b.bids || [])[0] && b.bids[0].price <= b.price, { bid1: b.bids && b.bids[0] && b.bids[0].price, price: b.price });
   check('带委比与买卖量', b.commissionRatio != null && b.bidVolume > 0 && b.askVolume > 0,
     { ratio: b.commissionRatio, bid: b.bidVolume, ask: b.askVolume });
+  // 委比是百分数，定义上只能在 ±100% 之间；超出说明算错了（客户端也别再乘 100）
+  check('委比落在 ±100% 内', Math.abs(b.commissionRatio) <= 100, b.commissionRatio);
+  check('委比与买卖量自洽',
+    Math.abs(b.commissionRatio - ((b.bidVolume - b.askVolume) / (b.bidVolume + b.askVolume)) * 100) < 1e-6,
+    { ratio: b.commissionRatio, want: ((b.bidVolume - b.askVolume) / (b.bidVolume + b.askVolume)) * 100 });
   const idx = await call('/api/stock-bar/orderbook?symbol=sh000001');
   check('指数没有盘口时返回结构化错误而不是 500', idx.status === 200 && idx.json.ok === false, idx.json.error);
 }
