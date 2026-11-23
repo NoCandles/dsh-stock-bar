@@ -1090,13 +1090,21 @@ check('顶栏钉在 Windows 标题栏下方（top=40px + 偏移 6px）',
 
 section('行情条拖动排序');
 {
-  // drop 事件里的 currentTarget 替身：几何（中点在 x=50）+ classList
-  const dropTarget = () => ({
-    getBoundingClientRect: () => ({ left: 0, width: 100, right: 100 }),
-    classList: { add() {}, remove() {} },
-  });
-  const dragStart = (node) => node.props.onDragStart({
-    currentTarget: dropTarget(),
+  // drop/dragover 事件里的 currentTarget 替身：几何（中点在 x=50）+ 会记录 class 的 classList
+  const mkTarget = () => {
+    const cls = new Set();
+    return {
+      cls,
+      getBoundingClientRect: () => ({ left: 0, width: 100, right: 100 }),
+      classList: {
+        add: (...ns) => ns.forEach((n) => cls.add(n)),
+        remove: (...ns) => ns.forEach((n) => cls.delete(n)),
+        contains: (n) => cls.has(n),
+      },
+    };
+  };
+  const dragStart = (node, tgt) => node.props.onDragStart({
+    currentTarget: tgt || mkTarget(),
     dataTransfer: { effectAllowed: '', setData() {} },
   });
 
@@ -1104,22 +1112,38 @@ section('行情条拖动排序');
   check('行情胶囊带 draggable=true（宿主有 reorder 能力时）',
     chips0.length === 4 && chips0.every((n) => n.props.draggable === true),
     chips0.map((n) => n.props.draggable));
-  check('胶囊挂齐拖动四事件（start/over/drop/end）',
+  check('胶囊挂齐拖动五事件（start/over/leave/drop/end）',
     chips0.every((n) => typeof n.props.onDragStart === 'function'
       && typeof n.props.onDragOver === 'function'
+      && typeof n.props.onDragLeave === 'function'
       && typeof n.props.onDrop === 'function'
       && typeof n.props.onDragEnd === 'function'), null);
 
-  // ① 把「贵州茅台」拖到「上证指数」上，落点在中点右侧 → 插到指数后面
+  // ① 悬停指示：把「贵州茅台」拖到「上证指数」上，看插入指示条跟着落点侧走
   const src = chips0[2]; // 贵州茅台
   const dst = chips0[0]; // 上证指数
-  dragStart(src);
+  const srcT = mkTarget();
+  const dstT = mkTarget();
+  dragStart(src, srcT);
   let dropAllowed = false;
-  dst.props.onDragOver({ preventDefault() { dropAllowed = true; } });
+  dst.props.onDragOver({ preventDefault() { dropAllowed = true; }, clientX: 90, currentTarget: dstT });
   check('拖到别的胶囊上 preventDefault（允许放置）', dropAllowed === true, dropAllowed);
-  src.props.onDragEnd({ currentTarget: dropTarget() });
-  dragStart(src);
-  dst.props.onDrop({ preventDefault() {}, clientX: 90, currentTarget: dropTarget() });
+  check('中点右侧悬停 → 目标亮「插后面」指示条',
+    dstT.cls.has('dst-drop-after') && !dstT.cls.has('dst-drop-before'), [...dstT.cls]);
+  const otherT = mkTarget();
+  chips0[1].props.onDragOver({ preventDefault() {}, clientX: 10, currentTarget: otherT });
+  check('挪到新目标后旧指示条熄灭、新目标亮「插前面」',
+    !dstT.cls.has('dst-drop-after') && otherT.cls.has('dst-drop-before'),
+    { dst: [...dstT.cls], other: [...otherT.cls] });
+  chips0[1].props.onDragLeave({ currentTarget: otherT });
+  check('dragLeave 熄灭指示条',
+    !otherT.cls.has('dst-drop-before') && !otherT.cls.has('dst-drop-after'), [...otherT.cls]);
+  src.props.onDragEnd({ currentTarget: srcT });
+  check('dragEnd 清掉拖拽源样式', !srcT.cls.has('dst-dragging'), [...srcT.cls]);
+
+  // ② 真正落一次：中点右侧 → 插到指数后面
+  dragStart(src, srcT);
+  dst.props.onDrop({ preventDefault() {}, clientX: 90, currentTarget: dstT });
   await settle(3);
   check('拖动排序请求已发出（/items/reorder）',
     fetchLog.some((u2) => u2.includes('/api/stock-bar/items/reorder')), fetchLog.slice(-3));
@@ -1127,26 +1151,29 @@ section('行情条拖动排序');
     reorderLog.length === 1 && reorderLog[0].length === 4
     && reorderLog[0].includes(MAOTAI) && reorderLog[0].includes(SHANGHAI),
     reorderLog[0]);
+  check('drop 后指示条与拖拽样式都清掉',
+    !dstT.cls.has('dst-drop-after') && !dstT.cls.has('dst-drop-before') && !srcT.cls.has('dst-dragging'),
+    { dst: [...dstT.cls], src: [...srcT.cls] });
   const names1 = findByClass(tree, 'dst-chip').map((n) => allText(n.kids));
   check('茅台被排到上证指数右侧（中点右落点=插后面）',
     /贵州茅台/.test(names1[1]) && /上证指数/.test(names1[0]), names1.map((t) => t.slice(0, 10)));
 
-  // ② 再拖回最前面：落点在目标中点左侧 → 插到目标前面
+  // ③ 再拖回最前面：落点在目标中点左侧 → 插到目标前面
   const chips1 = findByClass(tree, 'dst-chip');
   const src1 = chips1[1]; // 茅台（现在第 2 位）
   const dst1 = chips1[0]; // 上证指数
   dragStart(src1);
-  dst1.props.onDrop({ preventDefault() {}, clientX: 5, currentTarget: dropTarget() });
+  dst1.props.onDrop({ preventDefault() {}, clientX: 5, currentTarget: mkTarget() });
   await settle(3);
   const names2 = findByClass(tree, 'dst-chip').map((n) => allText(n.kids));
   check('中点左侧落点=插前面（茅台回到第 1 位）',
     /贵州茅台/.test(names2[0]), names2.map((t) => t.slice(0, 10)));
   check('两轮排序都落库（reorderLog 2 条）', reorderLog.length === 2, reorderLog.length);
 
-  // ③ 没先 dragStart 就 drop（chipDrag 为空）→ 不发请求、顺序不变
+  // ④ 没先 dragStart 就 drop（chipDrag 为空）→ 不发请求、顺序不变
   const chips2 = findByClass(tree, 'dst-chip');
   const before = chips2.map((n) => allText(n.kids));
-  chips2[1].props.onDrop({ preventDefault() {}, clientX: 90, currentTarget: dropTarget() });
+  chips2[1].props.onDrop({ preventDefault() {}, clientX: 90, currentTarget: mkTarget() });
   await settle(2);
   check('悬空 drop（没有拖拽源）不发请求', reorderLog.length === 2, reorderLog.length);
   const after = findByClass(tree, 'dst-chip').map((n) => allText(n.kids));
