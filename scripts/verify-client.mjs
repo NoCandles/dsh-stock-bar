@@ -2151,6 +2151,33 @@ section('涨跌停标记');
   pingan.changePct = pingan.quote.changePct;
   clickTitle('立即刷新行情');
   await settle(6);
+  // ST 回归：2026-07-06 新规后主板 ST/*ST 涨跌幅 = 10%（不再是 5% 单档）。
+  // 把平安银行改名成 ST 股验证：-5% 位置（旧规则的跌停价 9.61）不标记，-10% 位置（9.11）才标记。
+  const stName = pingan.name;
+  pingan.name = 'ST平安';
+  pingan.price = 9.61;
+  pingan.quote.price = 9.61;
+  pingan.quote.changePct = +(((9.61 - 10.12) / 10.12) * 100).toFixed(2);
+  pingan.changePct = pingan.quote.changePct;
+  clickTitle('立即刷新行情');
+  await settle(6);
+  check('ST 股在旧规则 5% 的跌停位不再打标记（新规 ±10%）',
+    !collect(tree).some((n) => n.props && String(n.props.className || '').includes('dst-limit')), null);
+  pingan.price = 9.11;
+  pingan.quote.price = 9.11;
+  pingan.quote.changePct = +(((9.11 - 10.12) / 10.12) * 100).toFixed(2);
+  pingan.changePct = pingan.quote.changePct;
+  clickTitle('立即刷新行情');
+  await settle(6);
+  check('ST 股在 ±10% 涨跌停位打标记',
+    collect(tree).some((n) => n.props && String(n.props.className || '').includes('dst-limit')), null);
+  pingan.name = stName;
+  pingan.price = old;
+  pingan.quote.price = old;
+  pingan.quote.changePct = +(((old - 10.12) / 10.12) * 100).toFixed(2);
+  pingan.changePct = pingan.quote.changePct;
+  clickTitle('立即刷新行情');
+  await settle(6);
 }
 
 section('休市时自动放慢轮询');
