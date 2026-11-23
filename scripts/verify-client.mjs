@@ -1498,6 +1498,40 @@ section('分时图（默认图型）');
       check('分时读数浮层也压在画布上（.dst-kline-plot 内）',
         findByClass(tree, 'dst-kline-plot').some((p) => collect(p).includes(trendLegend[0])), null);
     }
+
+    // ---- 涨跌幅刻度：必须标真实百分比（回归：轴上曾永远写死 ±100.00%）----
+    const pctLabels = (from) => textCalls.slice(from).map(String)
+      .filter((t) => /^-?\d+\.\d{2}%$/.test(t));
+    // ① 多日分时（上面已切到 3 日）：累计涨跌会超出单日涨跌停 → 轴按数据实际波幅自适应
+    {
+      const t3 = mkTrend(3);
+      const prev3 = Number(t3.prevClose);
+      let hi3 = prev3; let lo3 = prev3;
+      for (const p of t3.points) { hi3 = Math.max(hi3, p.price, p.avg); lo3 = Math.min(lo3, p.price, p.avg); }
+      const top3 = `${(Math.max(hi3 - prev3, prev3 - lo3, prev3 * 0.002) / prev3 * 100).toFixed(2)}%`;
+      const labels = pctLabels(textCalls.length - 40);
+      check('多日分时轴不再出现 ±100% 假刻度',
+        labels.length >= 5 && !labels.includes('100.00%') && !labels.includes('-100.00%'),
+        labels.slice(0, 8));
+      check('多日分时顶格刻度 = 数据实际波幅',
+        labels.includes(top3), { expect: top3, got: labels.slice(0, 8) });
+    }
+    // ② 当日分时 + 主板个股（平安银行）：轴锚定 ±10% 涨跌停，边缘刻度就是 10.00%
+    check('存在 1 日分时切换', clickText('1日'));
+    await settle(12);
+    const pinganRow = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function')
+      .find((n) => allText(n.kids).includes('平安银行'));
+    check('能选中平安银行行', !!pinganRow, null);
+    if (pinganRow) {
+      pinganRow.props.onClick({ preventDefault() {}, stopPropagation() {} });
+      await settle(14);
+      const labels = pctLabels(textCalls.length - 40);
+      check('主板个股当日分时轴锚定 ±10% 涨跌停',
+        labels.includes('10.00%') && labels.includes('-10.00%') && labels.includes('5.00%'),
+        labels.slice(0, 8));
+      check('锚定轴不再出现 ±100%/±50% 假刻度',
+        !labels.includes('100.00%') && !labels.includes('50.00%'), labels.slice(0, 8));
+    }
   }
 }
 
