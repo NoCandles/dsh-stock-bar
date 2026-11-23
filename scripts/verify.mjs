@@ -194,7 +194,7 @@ apply(ctx, { storePath });
 section('路由注册');
 const ROUTE_LIST = [
   '/state', '/kline', '/trends', '/orderbook', '/search', '/trades', '/health',
-  '/items/save', '/items/remove', '/settings/save',
+  '/items/save', '/items/remove', '/items/reorder', '/settings/save',
   '/trades/save', '/trades/remove', '/trades/clear', '/trades/apply',
   '/alerts/save', '/alerts/remove', '/alerts/ack', '/alerts/history', '/alerts/history/clear',
   '/equity', '/equity/clear',

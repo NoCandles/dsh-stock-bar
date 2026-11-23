@@ -324,6 +324,8 @@ function mkCandles(n) {
 const ALL_CANDLES = mkCandles(800);
 
 const fetchLog = [];
+/** 拖动排序请求体（按到达顺序记录），供行情条拖动排序断言用 */
+const reorderLog = [];
 /** 故障注入。null = 正常；'auth' = 宿主路由不存在，DSH 回 401；
  *  'offline' = 本地服务没起来，fetch 直接 reject。 */
 let FAULT = null;
@@ -526,6 +528,22 @@ function fakeFetch(url, init = {}) {
   } else if (u.includes('/equity')) {
     body = { ok: true, snapshots: STATE.equitySnapshots || [] };
   } else if (u.includes('/search')) body = { ok: true, hits: [] };
+  else if (u.includes('/items/reorder')) {
+    // 宿主契约：POST /items/reorder { order:[symbol,...] } -> { ok:true, state }
+    let patch = {};
+    try { patch = JSON.parse(init.body || '{}'); } catch { /* 空补丁 */ }
+    const order = Array.isArray(patch.order) ? patch.order.map(String) : [];
+    reorderLog.push(order.slice());
+    if (order.length) {
+      const rank = new Map(order.map((s, i) => [s, i]));
+      const resort = (list) => list.filter((it) => rank.has(it.symbol))
+        .sort((a, b) => rank.get(a.symbol) - rank.get(b.symbol))
+        .concat(list.filter((it) => !rank.has(it.symbol)));
+      STATE.items = resort(STATE.items);
+      STATE.strip = resort(STATE.strip);
+    }
+    body = { ok: true, state: STATE };
+  }
   else body = { ok: true };
   return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(body) });
 }
@@ -1069,6 +1087,71 @@ const rootNode = findByClass(tree, 'dst-root')[0];
 check('顶栏钉在 Windows 标题栏下方（top=40px + 偏移 6px）',
   rootNode && rootNode.props.style && /46px/.test(String(rootNode.props.style.top)),
   rootNode && rootNode.props.style);
+
+section('行情条拖动排序');
+{
+  // drop 事件里的 currentTarget 替身：几何（中点在 x=50）+ classList
+  const dropTarget = () => ({
+    getBoundingClientRect: () => ({ left: 0, width: 100, right: 100 }),
+    classList: { add() {}, remove() {} },
+  });
+  const dragStart = (node) => node.props.onDragStart({
+    currentTarget: dropTarget(),
+    dataTransfer: { effectAllowed: '', setData() {} },
+  });
+
+  const chips0 = findByClass(tree, 'dst-chip');
+  check('行情胶囊带 draggable=true（宿主有 reorder 能力时）',
+    chips0.length === 4 && chips0.every((n) => n.props.draggable === true),
+    chips0.map((n) => n.props.draggable));
+  check('胶囊挂齐拖动四事件（start/over/drop/end）',
+    chips0.every((n) => typeof n.props.onDragStart === 'function'
+      && typeof n.props.onDragOver === 'function'
+      && typeof n.props.onDrop === 'function'
+      && typeof n.props.onDragEnd === 'function'), null);
+
+  // ① 把「贵州茅台」拖到「上证指数」上，落点在中点右侧 → 插到指数后面
+  const src = chips0[2]; // 贵州茅台
+  const dst = chips0[0]; // 上证指数
+  dragStart(src);
+  let dropAllowed = false;
+  dst.props.onDragOver({ preventDefault() { dropAllowed = true; } });
+  check('拖到别的胶囊上 preventDefault（允许放置）', dropAllowed === true, dropAllowed);
+  src.props.onDragEnd({ currentTarget: dropTarget() });
+  dragStart(src);
+  dst.props.onDrop({ preventDefault() {}, clientX: 90, currentTarget: dropTarget() });
+  await settle(3);
+  check('拖动排序请求已发出（/items/reorder）',
+    fetchLog.some((u2) => u2.includes('/api/stock-bar/items/reorder')), fetchLog.slice(-3));
+  check('请求体 order 是完整 symbol 顺序（4 个且含全部标的）',
+    reorderLog.length === 1 && reorderLog[0].length === 4
+    && reorderLog[0].includes(MAOTAI) && reorderLog[0].includes(SHANGHAI),
+    reorderLog[0]);
+  const names1 = findByClass(tree, 'dst-chip').map((n) => allText(n.kids));
+  check('茅台被排到上证指数右侧（中点右落点=插后面）',
+    /贵州茅台/.test(names1[1]) && /上证指数/.test(names1[0]), names1.map((t) => t.slice(0, 10)));
+
+  // ② 再拖回最前面：落点在目标中点左侧 → 插到目标前面
+  const chips1 = findByClass(tree, 'dst-chip');
+  const src1 = chips1[1]; // 茅台（现在第 2 位）
+  const dst1 = chips1[0]; // 上证指数
+  dragStart(src1);
+  dst1.props.onDrop({ preventDefault() {}, clientX: 5, currentTarget: dropTarget() });
+  await settle(3);
+  const names2 = findByClass(tree, 'dst-chip').map((n) => allText(n.kids));
+  check('中点左侧落点=插前面（茅台回到第 1 位）',
+    /贵州茅台/.test(names2[0]), names2.map((t) => t.slice(0, 10)));
+  check('两轮排序都落库（reorderLog 2 条）', reorderLog.length === 2, reorderLog.length);
+
+  // ③ 没先 dragStart 就 drop（chipDrag 为空）→ 不发请求、顺序不变
+  const chips2 = findByClass(tree, 'dst-chip');
+  const before = chips2.map((n) => allText(n.kids));
+  chips2[1].props.onDrop({ preventDefault() {}, clientX: 90, currentTarget: dropTarget() });
+  await settle(2);
+  check('悬空 drop（没有拖拽源）不发请求', reorderLog.length === 2, reorderLog.length);
+  const after = findByClass(tree, 'dst-chip').map((n) => allText(n.kids));
+  check('悬空 drop 顺序不变', after.join('|') === before.join('|'), [before, after]);
+}
 
 section('涨跌语义色');
 {
