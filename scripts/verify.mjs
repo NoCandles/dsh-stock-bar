@@ -1043,6 +1043,15 @@ section('AI 分析：多周期 K 线 + 历史记录（本地打桩，不依赖�
     check('列表里不放全文（只放摘要）', typeof h0.text === 'undefined' && typeof h0.snippet === 'string' && h0.snippet.length > 0,
       Object.keys(h0));
 
+    // —— ?symbol= 按标的过滤 ——
+    const mine = await call(ctx, `/ai/history?symbol=${encodeURIComponent(symbol)}`);
+    check('?symbol= 只回这只标的', mine.json.ok === true && mine.json.items.length === hist.json.items.length
+      && mine.json.items.every((x) => x.symbol === symbol),
+      mine.json.items && mine.json.items.length);
+    const other = await call(ctx, '/ai/history?symbol=sz000001');
+    check('?symbol= 传别的标的是空列表', other.json.ok === true && other.json.items.length === 0,
+      other.json.items && other.json.items.length);
+
     const full = await call(ctx, `/ai/history/get?id=${h0.id}`);
     check('能取回历史全文', full.json && full.json.ok === true && full.json.item.text === '看多', full.json);
     check('取全文时周期信息完整', full.json.item.periods.length === 3, full.json.item.periods);

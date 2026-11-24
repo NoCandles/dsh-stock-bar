@@ -435,10 +435,12 @@ function fakeFetch(url, init = {}) {
     AI_HISTORY.length = 0;
     body = { ok: true, cleared: n };
   } else if (u.includes('/ai/history')) {
-    // 列表只回摘要（不含 text），和宿主契约一致
+    // 列表只回摘要（不含 text），和宿主契约一致；?symbol= 只看这只标的
+    const sym = new URL(u, 'http://x').searchParams.get('symbol');
+    const list = sym ? AI_HISTORY.filter((h) => h.symbol === sym) : AI_HISTORY;
     body = {
       ok: true,
-      items: AI_HISTORY.map((h) => {
+      items: list.map((h) => {
         const { text, pack, ...rest } = h;
         return {
           ...rest,
@@ -2934,8 +2936,24 @@ section('AI 分析');
     findByClass(tree, 'dst-ai-out').length);
   check('切换标的后回到空态文案', /让模型做一次复盘/.test(allText(tree)), null);
 
-  // —— 历史记录：列表 / 回看 / 删除 / 清空 ——
-  check('历史区块显示条数', /历史分析（2）/.test(allText(tree)), null);
+  // —— 历史记录：默认只看当前标的，可切「全部」——
+  check('历史默认只看当前标的（切到平安银行后是 0 条）',
+    /历史分析（0）/.test(allText(tree)) && findByClass(tree, 'dst-ai-histrow').length === 0,
+    [/(?:历史分析（\d+）)/.exec(allText(tree)), findByClass(tree, 'dst-ai-histrow').length]);
+  check('历史摘要标出当前标的（点已选中的芯片=取消选中，回落到列表第一只贵州茅台）',
+    /历史分析（0）\s*·\s*贵州茅台/.test(allText(tree)), null);
+  check('过滤空态说明可切「全部」看其它标的', /点上面的「全部」/.test(allText(tree)), null);
+  check('有「只看当前/全部」两个切换按钮',
+    ['只看当前', '全部'].every((l) => findByClass(tree, 'dst-ai-hist')[0]
+      && collect(findByClass(tree, 'dst-ai-hist')[0]).some((n) => n.tag === 'button' && String(allText(n)).trim() === l)), null);
+  const histEl = findByClass(tree, 'dst-ai-hist')[0];
+  const histAllBtn = histEl ? collect(histEl).find((n) => n.tag === 'button' && String(allText(n)).trim() === '全部') : null;
+  check('点「全部」看所有标的', (() => { if (!histAllBtn) return false; histAllBtn.props.onClick({}); return true; })());
+  await settle(16);
+  check('全部模式下显示 2 条', /历史分析（2）/.test(allText(tree)) && findByClass(tree, 'dst-ai-histrow').length === 2,
+    findByClass(tree, 'dst-ai-histrow').length);
+  check('摘要注明全部标的', /历史分析（2）\s*·\s*全部标的/.test(allText(tree)), null);
+  // 后面的回看/追问/删除/清空用例需要有条目，保持「全部」模式继续
   check('历史条目渲染出两行', findByClass(tree, 'dst-ai-histrow').length === 2,
     findByClass(tree, 'dst-ai-histrow').length);
   check('历史条目带摘要片段', findByClass(tree, 'dst-ai-histsnip').length === 2,

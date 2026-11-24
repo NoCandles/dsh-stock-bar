@@ -45,13 +45,13 @@ With `dsh-better-sidebar` installed, a "股票" tab also appears in the right si
 ## Self-checks
 
 ```bash
-node scripts/verify.mjs           # host, 261 assertions offline (add --offline)
-node scripts/verify-client.mjs    # client rendering, 631 assertions
+node scripts/verify.mjs           # host, 262 assertions offline (add --offline)
+node scripts/verify-client.mjs    # client rendering, 637 assertions
 node scripts/verify-live.mjs      # real HTTP end-to-end, 180 assertions
 node scripts/verify-analysis.mjs  # AI data pack, 151 assertions
 ```
 
-1223 assertions in total; none of them need DSH or any API key.
+1230 assertions in total; none of them need DSH or any API key.
 
 ## Notes
 
