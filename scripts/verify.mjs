@@ -505,6 +505,43 @@ section('损坏文件恢复');
   check('损坏文件被改名留档', fs.readdirSync(tmpDir).some((f) => f.includes('.broken-')), fs.readdirSync(tmpDir));
 }
 
+section('记流水自动改成本价（摊薄概念已移除，成本价由流水增量维护）');
+{
+  // 新逻辑：addTrade 直接把清单里这只票的 持股/成本价 跟着改——
+  // 买入 = 加权均价（手续费算进买入成本），卖出 = 盈亏摊到剩余股上（券商摊薄口径）。
+  const autoPath = path.join(tmpDir, 'portfolio-autocost.json');
+  const { PortfolioStore } = await import('../lib/store.js');
+  const st = new PortfolioStore(autoPath);
+  await st.upsert({ symbol: 'sz000001', code: '000001', name: '平安银行', market: 'cn', currency: 'CNY', shares: 1000, cost: 10 });
+
+  await st.addTrade({ symbol: 'sz000001', side: 'buy', price: 12, shares: 500, fee: 0 });
+  let it = st.items.find((i) => i.symbol === 'sz000001');
+  check('买入后持股自动加上（1000+500=1500）', it.shares === 1500, it.shares);
+  // (10×1000 + 12×500) / 1500 = 10.6667
+  check('买入后成本变成加权均价 10.6667', Math.abs(it.cost - 10.6666666667) < 1e-4, it.cost);
+
+  await st.addTrade({ symbol: 'sz000001', side: 'sell', price: 14, shares: 300, fee: 0 });
+  it = st.items.find((i) => i.symbol === 'sz000001');
+  check('卖出后持股减少（1500-300=1200）', it.shares === 1200, it.shares);
+  // 盈利卖出摊低成本：(10.6667×1500 − 14×300) / 1200 ≈ 9.8333
+  check('盈利卖出摊低成本 9.8333', Math.abs(it.cost - 9.8333333333) < 1e-3, it.cost);
+
+  await st.addTrade({ symbol: 'sz000001', side: 'sell', price: 8, shares: 1200, fee: 0 });
+  it = st.items.find((i) => i.symbol === 'sz000001');
+  check('清仓后持股归零', it.shares === 0, it.shares);
+
+  // 清单里没有的票：只记流水，不建新行
+  await st.addTrade({ symbol: 'sh600000', side: 'buy', price: 8, shares: 100, fee: 0 });
+  check('清单里没有的票不建新行', !st.items.some((i) => i.symbol === 'sh600000'), st.items.length);
+
+  // /state 里不再有 dilutedCost 字段
+  const c4 = makeCtx();
+  apply(c4, {});
+  const r4 = await call(c4, '/state');
+  check('/state 的持仓里没有 dilutedCost 字段了',
+    r4.json.items.every((i) => i.dilutedCost === undefined), Object.keys(r4.json.items[0] || {}));
+}
+
 section('分时 /trends 与盘口 /orderbook');
 if (!OFFLINE) {
   const t = await call(ctx, '/trends?symbol=sh600519&days=1');
@@ -585,7 +622,8 @@ if (!OFFLINE) {
   {
     const item = applied.json.state.items.find((i) => i.symbol === 'sz000001');
     check('apply 后持仓股数 = 1500', item && item.shares === 1500, item && item.shares);
-    check('apply 后成本价 = 11.0025', item && Math.abs(item.cost - 11.0025) < 1e-6, item && item.cost);
+    check('apply 后成本价 = 9.67（卖出盈亏摊进成本，与记一笔时同一套增量算法）',
+      item && Math.abs(item.cost - 9.67) < 1e-6, item && item.cost);
     check('apply 后标记为持仓', item && item.held === true, item && item.held);
   }
 

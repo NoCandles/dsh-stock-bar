@@ -137,20 +137,29 @@ STATE.items = STATE.strip.slice();
 
 function mkTrend(days = 1) {
   const points = [];
-  const total = 241 * days;
+  // 真实交易时段：09:30–11:30（121 个点）+ 13:00–15:00（121 个点），午休没有点。
+  // 时间串也照东财原始格式带日期（"2026-10-16 09:30"）——分时图靠它把点摆到时间轴上。
+  const MINUTES = [];
+  for (let m = 9 * 60 + 30; m <= 11 * 60 + 30; m += 1) MINUTES.push(m);
+  for (let m = 13 * 60; m <= 15 * 60; m += 1) MINUTES.push(m);
   let px = 1650;
-  const start = new Date('2026-10-16T09:30:00+08:00').getTime();
-  for (let i = 0; i < total; i++) {
-    const o = px;
-    px = +(px * (1 + ((i % 11) - 5) / 900)).toFixed(2);
-    const t = new Date(start + i * 60000);
-    points.push({
-      time: `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`,
-      open: o, price: px,
-      high: +Math.max(o, px).toFixed(2), low: +Math.min(o, px).toFixed(2),
-      volume: 1200 + (i % 37) * 11, amount: 2e6 + i * 1000,
-      avg: +((o + px) / 2).toFixed(2),
-    });
+  let i = 0;
+  for (let d = 0; d < days; d++) {
+    const ymd = `2026-10-${String(16 + d).padStart(2, '0')}`;
+    for (const min of MINUTES) {
+      const o = px;
+      px = +(px * (1 + ((i % 11) - 5) / 900)).toFixed(2);
+      const hh = String(Math.floor(min / 60)).padStart(2, '0');
+      const mm = String(min % 60).padStart(2, '0');
+      points.push({
+        time: `${ymd} ${hh}:${mm}`,
+        open: o, price: px,
+        high: +Math.max(o, px).toFixed(2), low: +Math.min(o, px).toFixed(2),
+        volume: 1200 + (i % 37) * 11, amount: 2e6 + i * 1000,
+        avg: +((o + px) / 2).toFixed(2),
+      });
+      i += 1;
+    }
   }
   return {
     ok: true, symbol: MAOTAI, code: '600519', market: 1, name: '贵州茅台',
@@ -159,6 +168,8 @@ function mkTrend(days = 1) {
 }
 
 const TREND = mkTrend(1);
+/** 非空时 /trends 只回这个 HH:MM 之前的分时点（模拟盘中），见假 api 的 /trends 分支 */
+let TREND_CUT = null;
 
 /** 盘口：asks[0] 必须是卖1（最低卖价），bids[0] 是买1（最高买价）——
  *  这是 lib/providers.js:597-612 的顺序，界面负责把卖盘倒过来显示。 */
@@ -466,7 +477,12 @@ function fakeFetch(url, init = {}) {
   } else if (u.includes('/trends')) {
     const q = new URL(u, 'http://x').searchParams;
     const days = Number(q.get('days')) || 1;
-    body = days === 1 ? TREND : mkTrend(days);
+    const full = days === 1 ? TREND : mkTrend(days);
+    // TREND_CUT 模拟「盘中进行中」：只回当前时间之前的分时点，
+    // 用来验证曲线右端会留白、不会把半天数据拉满整幅。
+    body = TREND_CUT
+      ? { ...full, points: full.points.filter((p) => p.time.slice(11) <= TREND_CUT) }
+      : full;
   } else if (u.includes('/orderbook')) body = BOOK;
   else if (u.includes('/trades/save')) {
     // 宿主契约：POST /trades/save 返回 { ok:true, trade, realized, state }
@@ -1300,6 +1316,20 @@ section('表格工具条 / 排序 / 搜索 / 汇总');
   await settle(12);
   const restored = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function').length;
   check('清空后行回来了', restored === beforeRows, { restored, beforeRows });
+
+  // ---- 只剩一行时不画汇总条（跟行数据完全重复） ----
+  let oneErr = null;
+  try { input.props.onChange({ target: { value: '贵州茅台' } }); } catch (e) { oneErr = e; }
+  check('单行搜索不抛错', oneErr === null, oneErr && oneErr.message);
+  await settle(12);
+  const footOne = findByClass(tree, 'dst-tablefoot');
+  check('搜索只剩一行时不再画汇总条', footOne.length === 0, footOne.length);
+  let clrErr = null;
+  try { input.props.onChange({ target: { value: '' } }); } catch (e) { clrErr = e; }
+  check('清空搜索不抛错（第二次）', clrErr === null, clrErr && clrErr.message);
+  await settle(12);
+  check('恢复多行后汇总条回来', findByClass(tree, 'dst-tablefoot').length === 1,
+    findByClass(tree, 'dst-tablefoot').length);
 }
 
 section('面板外壳');
@@ -1527,23 +1557,33 @@ section('分时图（默认图型）');
     }
 
     // ---- 涨跌幅刻度：必须标真实百分比（回归：轴上曾永远写死 ±100.00%）----
+    // 纵轴自适应后还会把幅度吸附到好看档位（1/4 格取整），轴缘是 ±8.00% 这类数字
+    const TREND_STEPS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5, 8, 10, 15, 20, 30];
+    const niceStepT = (x) => { for (const s of TREND_STEPS) if (s >= x - 1e-9) return s; return Math.ceil(x); };
+    const trendTopPct = (data) => {
+      const prev = Number(data.prevClose);
+      let hi = prev; let lo = prev;
+      for (const p of data.points) { hi = Math.max(hi, p.price, p.avg); lo = Math.min(lo, p.price, p.avg); }
+      const raw = Math.max(hi - prev, prev - lo, prev * 0.002) / prev * 100;
+      // 与 drawTrend 同步：幅度留 20% 余量再吸附（顶格刻度永远在当日最高价上方）
+      return niceStepT(raw * 1.2 / 4) * 4;
+    };
     const pctLabels = (from) => textCalls.slice(from).map(String)
       .filter((t) => /^-?\d+\.\d{2}%$/.test(t));
     // ① 多日分时（上面已切到 3 日）：累计涨跌会超出单日涨跌停 → 轴按数据实际波幅自适应
     {
       const t3 = mkTrend(3);
-      const prev3 = Number(t3.prevClose);
-      let hi3 = prev3; let lo3 = prev3;
-      for (const p of t3.points) { hi3 = Math.max(hi3, p.price, p.avg); lo3 = Math.min(lo3, p.price, p.avg); }
-      const top3 = `${(Math.max(hi3 - prev3, prev3 - lo3, prev3 * 0.002) / prev3 * 100).toFixed(2)}%`;
-      const labels = pctLabels(textCalls.length - 40);
+      const top3 = `${trendTopPct(t3).toFixed(2)}%`;
+      const labels = pctLabels(textCalls.length - 160);
       check('多日分时轴不再出现 ±100% 假刻度',
         labels.length >= 5 && !labels.includes('100.00%') && !labels.includes('-100.00%'),
         labels.slice(0, 8));
-      check('多日分时顶格刻度 = 数据实际波幅',
+      check('多日分时顶格刻度 = 波幅吸附后的好看档位',
         labels.includes(top3), { expect: top3, got: labels.slice(0, 8) });
     }
-    // ② 当日分时 + 主板个股（平安银行）：轴锚定 ±10% 涨跌停，边缘刻度就是 10.00%
+    // ② 当日分时同样自适应（回归：轴曾写死 ±100%，后来锚定 ±10% 涨跌停——
+    //    小涨小跌的日子（±1% 级别）整条曲线被压成一条横线，看不出趋势；
+    //    现在统一按当日实际波幅对称自适应，东财 App 同款）
     check('存在 1 日分时切换', clickText('1日'));
     await settle(12);
     const pinganRow = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function')
@@ -1552,12 +1592,103 @@ section('分时图（默认图型）');
     if (pinganRow) {
       pinganRow.props.onClick({ preventDefault() {}, stopPropagation() {} });
       await settle(14);
-      const labels = pctLabels(textCalls.length - 40);
-      check('主板个股当日分时轴锚定 ±10% 涨跌停',
-        labels.includes('10.00%') && labels.includes('-10.00%') && labels.includes('5.00%'),
-        labels.slice(0, 8));
-      check('锚定轴不再出现 ±100%/±50% 假刻度',
-        !labels.includes('100.00%') && !labels.includes('50.00%'), labels.slice(0, 8));
+      const t1 = mkTrend(1);
+      const prev1 = Number(t1.prevClose);
+      const topPct1 = trendTopPct(t1);
+      const span1 = topPct1 / 100 * prev1;
+      const upPct = `${topPct1.toFixed(2)}%`;
+      const dnPct = `-${topPct1.toFixed(2)}%`;
+      const fmtP = (v) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const labels = pctLabels(textCalls.length - 160);
+      check('当日分时轴顶格刻度 = 波幅留余量吸附后的好看档位（高于当日最高价，不再锚定涨跌停）',
+        labels.includes(upPct) && labels.includes(dnPct) && labels.includes('0.00%'),
+        { expect: [upPct, '0.00%', dnPct], got: labels.slice(0, 10) });
+      check('顶格刻度高于当日最大偏离（价格没到顶格也要显示这一格）',
+        topPct1 >= (Math.max(...t1.points.map((p) => (p.price - prev1) / prev1)) * 100 * 1.1),
+        { top: topPct1, maxDevPct: Math.max(...t1.points.map((p) => (p.price - prev1) / prev1)) * 100 });
+      check('轴不再出现 ±100%/±50% 假刻度',
+        !labels.includes('100.00%') && !labels.includes('50.00%'), labels.slice(0, 10));
+      // 右轴每个刻度两行：主行是「该位置对应的价格」，副行小字是涨跌幅。
+      // 边缘价格 = 昨收 ± 吸附后的波幅（不再是涨停/跌停价）。
+      const priceLabels = textCalls.slice(-160).map(String)
+        .filter((t) => /^[\d,]+\.\d{2}$/.test(t));
+      check('右轴边缘刻度带对应价格（昨收±波幅）',
+        priceLabels.includes(fmtP(prev1 + span1)) && priceLabels.includes(fmtP(prev1 - span1)),
+        priceLabels.slice(0, 10));
+      check('右轴 0% 刻度的价格就是昨收', priceLabels.includes(fmtP(prev1)), priceLabels.slice(0, 10));
+      // 东财同款 1/4 步密度：±1/4、±3/4 波幅的刻度也要有
+      check('右轴按 1/4 波幅分格（9 条刻度线）',
+        labels.includes(`${(topPct1 / 4).toFixed(2)}%`)
+          && labels.includes(`${(topPct1 * 3 / 4).toFixed(2)}%`),
+        labels.slice(0, 10));
+    }
+
+    // ---- 横轴：固定交易时段（午休折成一处），盘中的曲线右边留白 ----
+    // 旧实现是「按第几个点均分」：每来一分钟的数据，整条曲线就被重新挤一遍，
+    // 轴上刻度也跟着数据点数漂。现在按「当天第几个交易分钟」定位。
+    {
+      TREND_CUT = '10:07'; // 模拟盘中：只回 9:30–10:07
+      clickText('3日');
+      await settle(12);
+      clickText('1日');
+      await settle(14);
+
+      const trendNode = collect(tree).filter((n) => n.tag === 'canvas'
+        && typeof n.props.onMouseMove === 'function' && typeof n.props.onMouseDown !== 'function').pop();
+      check('分时图有可悬停的 canvas', !!trendNode && !!(trendNode.props.ref && trendNode.props.ref.current), null);
+
+      const recent = textCalls.slice(-90).map(String);
+      check('分时轴有 9:30 刻度', recent.includes('9:30'), recent.slice(-14));
+      check('分时轴有 10:30 刻度', recent.includes('10:30'), null);
+      check('分时轴把午休折成一格（11:30/13:00）', recent.includes('11:30/13:00'), null);
+      check('分时轴有 14:00 刻度', recent.includes('14:00'), null);
+      check('分时轴有 15:00 刻度', recent.includes('15:00'), null);
+      check('分时轴不再直接写原始时间串', !recent.some((t) => /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(t)),
+        recent.filter((t) => /\d{4}-\d{2}-\d{2}/.test(t)));
+
+      const posOf = (label) => textPos.filter(([t]) => t === label).pop();
+      const p930 = posOf('9:30');
+      const p1500 = posOf('15:00');
+      check('9:30 刻度贴左边界', !!p930 && p930[1] <= 12, p930);
+      check('15:00 刻度贴右边界（padL+plotW）', !!p1500 && p1500[1] >= 645, p1500);
+
+      const canvasEl = trendNode && trendNode.props.ref ? trendNode.props.ref.current : null;
+      const hoverAt = async (clientX) => {
+        trendNode.props.onMouseMove({ clientX, clientY: 120, currentTarget: canvasEl });
+        await settle(8);
+      };
+
+      // 盘中：数据到 10:07（第 37 个交易分钟），右侧是空白的。光标停在右边空白处
+      // 应该落在最后一个点上，而不是按等分算出个下午的时间。
+      await hoverAt(600);
+      const hoverFar = allText(tree);
+      check('盘中光标停在右侧空白区落到最后一个点（10:07）', /10:07/.test(hoverFar), hoverFar.slice(0, 160));
+      check('盘中读数不再把完整时间串（含日期）写进标题', !/2026-10-16/.test(hoverFar), hoverFar.slice(0, 160));
+
+      // 收盘/全天数据：光标在正中间应该落在 11:30（午休折点，和 13:00 同一处）
+      TREND_CUT = null;
+      clickText('3日');
+      await settle(12);
+      clickText('1日');
+      await settle(14);
+      const fullNode = collect(tree).filter((n) => n.tag === 'canvas'
+        && typeof n.props.onMouseMove === 'function' && typeof n.props.onMouseDown !== 'function').pop();
+      const fullEl = fullNode && fullNode.props.ref ? fullNode.props.ref.current : null;
+      const hoverFull = async (clientX) => {
+        fullNode.props.onMouseMove({ clientX, clientY: 120, currentTarget: fullEl });
+        await settle(8);
+      };
+      await hoverFull(8 + 654 * 0.5);
+      const midText = allText(tree);
+      check('午休折点两侧的 11:30 / 13:00 落在同一处', /11:30/.test(midText), midText.slice(0, 160));
+      await hoverFull(8);
+      check('最左边是 9:30', /09:30/.test(allText(tree)), allText(tree).slice(0, 160));
+      await hoverFull(663);
+      check('最右边是 15:00', /15:00/.test(allText(tree)), allText(tree).slice(0, 160));
+      if (fullNode && typeof fullNode.props.onMouseLeave === 'function') {
+        fullNode.props.onMouseLeave({ type: 'mouseleave' });
+        await settle(8);
+      }
     }
   }
 }
@@ -2128,6 +2259,37 @@ section('成本线（持仓时画在图上）');
   check('成本相关样式类生效', costCells.length > 0, costCells.map((n) => n.props.className).slice(0, 4));
 }
 
+section('出轴成本标签贴左端（摊薄概念已移除，成本价由流水自动维护）');
+{
+  // 平安银行：成本 11.2，昨收 10.12，主板 ±10% 轴放不下 → 成本线贴顶（出轴）
+  const trs = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function');
+  const row = trs.find((n) => /平安银行/.test(allText(n.kids)));
+  check('找得到平安银行行', !!row, trs.map((n) => allText(n.kids).slice(0, 12)));
+  if (row) {
+    let err = null;
+    try { row.props.onClick({ preventDefault() {}, stopPropagation() {} }); } catch (e) { err = e; }
+    check('选中平安银行不抛错', err === null, err && err.message);
+    await settle(14);
+    // 出轴（贴顶）的成本标签要贴左端画，不能压在右上角的涨跌停刻度上
+    const marks = textPos.map((t) => [String(t[0]), t[1], t[2]]).filter(([txt]) => /^成本 /.test(txt));
+    const clamped = marks.find(([txt]) => txt.includes('11.20'));
+    check('出轴成本标签写在画布上', !!clamped, marks.slice(-4));
+    if (clamped) {
+      check('出轴成本标签贴左端（不再压右轴刻度）', clamped[1] < 100, clamped);
+      // 方向随数据走：成本高于区间是 ↑、低于是 ↓（这里选平安但 K 线夹具是高价股，出轴在下沿 → ↓）
+      check('出轴成本标签带方向箭头', /[↑↓]/.test(clamped[0]), clamped);
+    }
+    // 摊薄徽标已从表格和面板成本条里移除
+    check('表格和面板里不再有「摊薄」字样', !/摊薄/.test(allText(tree)), null);
+    // 恢复选中茅台，免得影响后面的用例
+    const rowM = trs.find((n) => /贵州茅台/.test(allText(n.kids)));
+    if (rowM) {
+      rowM.props.onClick({ preventDefault() {}, stopPropagation() {} });
+      await settle(10);
+    }
+  }
+}
+
 section('涨跌停标记');
 {
   // 平安银行 9.85 / 昨收 10.12 = -2.67%，不到跌停，不该有标记
@@ -2238,7 +2400,7 @@ section('交易流水');
   check('显示买入方向', /买入/.test(txt), null);
   check('显示卖出方向', /卖出/.test(txt), null);
   check('有"记一笔"按钮', collect(tree).some((n) => n.tag === 'button' && allText(n.kids).includes('记一笔')));
-  check('有"按流水同步持仓"按钮', clickText('按流水同步持仓'));
+  check('有「按流水重算持仓」按钮', clickText('按流水重算持仓'));
   await settle(10);
   check('同步持仓请求 /trades/apply', fetchLog.some((u) => u.includes('/trades/apply')), null);
   let err = null;
