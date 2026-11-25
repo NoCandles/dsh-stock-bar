@@ -855,6 +855,55 @@ section('老版本数据文件迁移（升级不能丢持仓）');
     check('重新武装后可以再次触发', h4.fired.length === 1, h4.fired.length);
     fs.rmSync(dirH, { recursive: true, force: true });
   }
+
+  // 预警去重 + 触发冷却：同条件不堆两条，同一条不反复弹
+  {
+    const dirD = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-dedupe-'));
+    const sD = new PortfolioStore(path.join(dirD, 'portfolio.json'));
+    await sD.load();
+    const a1 = await sD.upsertAlert({ symbol: 'sh515050', code: '515050', name: '通信ETF华夏', kind: 'price', op: '<=', value: 0.68 });
+    // 0.679 与 0.68 只差 0.001（< 0.5%），算同一条——更新原预警，不再堆一条
+    const a2 = await sD.upsertAlert({ symbol: 'sh515050', code: '515050', name: '通信ETF华夏', kind: 'price', op: '<=', value: 0.679 });
+    check('同标的同方向且阈值接近的预警合并成一条', sD.alerts.length === 1, sD.alerts.length);
+    check('合并时阈值更新为新值', sD.alerts[0].value === 0.679 && a2 && a2.id === a1.id, sD.alerts[0].value);
+    const a3 = await sD.upsertAlert({ symbol: 'sh515050', code: '515050', name: '通信ETF华夏', kind: 'price', op: '>=', value: 0.68 });
+    check('方向不同不算重复', sD.alerts.length === 2, sD.alerts.length);
+    const a4 = await sD.upsertAlert({ symbol: 'sz000001', code: '000001', name: '平安银行', kind: 'pct', op: '<=', value: -3 });
+    check('标的或类型不同不算重复', sD.alerts.length === 3, sD.alerts.length);
+
+    // 涨跌幅防抖按绝对 0.3 个百分点：-3% 预警回到 -2.8 还不该重新武装（旧算法 -2.8 就清了）
+    const qp = (pct) => new Map([['sz000001', { price: 10, changePct: pct }]]);
+    const f1 = await sD.syncAlerts(qp(-3.2));
+    check('涨跌幅预警跌破阈值触发', f1.fired.length === 1 && f1.alerts.find((x) => x.kind === 'pct').hit === true, f1.fired.length);
+    const f2 = await sD.syncAlerts(qp(-2.8));
+    check('回到 -2.8（离阈值不到 0.3pp）不重新武装', f2.alerts.find((x) => x.kind === 'pct').firedAt != null,
+      f2.alerts.find((x) => x.kind === 'pct').firedAt);
+    const f3 = await sD.syncAlerts(qp(-2.6));
+    check('回到 -2.6（离阈值 0.3pp 以上）才重新武装', f3.alerts.find((x) => x.kind === 'pct').firedAt === null,
+      f3.alerts.find((x) => x.kind === 'pct').firedAt);
+    fs.rmSync(dirD, { recursive: true, force: true });
+
+    // 触发冷却：价格贴着阈值时，✓ 之后不会隔 5 秒又弹一次
+    const dirC = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-cool-'));
+    const sC = new PortfolioStore(path.join(dirC, 'portfolio.json'));
+    await sC.load();
+    await sC.upsertAlert({ symbol: 'sh515050', code: '515050', name: '通信ETF华夏', kind: 'price', op: '<=', value: 0.68 });
+    const qc = (p) => new Map([['sh515050', { price: p, changePct: 0 }]]);
+    const c1 = await sC.syncAlerts(qc(0.679));
+    check('第一次触发正常', c1.fired.length === 1, c1.fired.length);
+    check('触发后记了 lastFiredAt（落盘可查）', sC.alerts[0].lastFiredAt != null, sC.alerts[0].lastFiredAt);
+    await sC.ackAlert(sC.alerts[0].id);
+    const c2 = await sC.syncAlerts(qc(0.679));
+    check('✓ 之后价格还在阈值下不立刻重复触发（冷却生效）', c2.fired.length === 0, c2.fired.length);
+    const c3 = await sC.syncAlerts(qc(0.684));
+    check('离开阈值 0.5% 重新武装并清掉冷却', c3.alerts[0].firedAt === null && c3.alerts[0].lastFiredAt === null,
+      { firedAt: c3.alerts[0].firedAt, lastFiredAt: c3.alerts[0].lastFiredAt });
+    const c4 = await sC.syncAlerts(qc(0.679));
+    check('再跌破是新的穿越，正常触发', c4.fired.length === 1, c4.fired.length);
+    const rawC = JSON.parse(fs.readFileSync(sC.file, 'utf8'));
+    check('lastFiredAt 写进了存盘文件', rawC.alerts[0].lastFiredAt != null, rawC.alerts[0].lastFiredAt);
+    fs.rmSync(dirC, { recursive: true, force: true });
+  }
   await s.addTrade({ symbol: 'sh600519', side: 'buy', price: 1622, shares: 100, fee: 0, date: '2026-02-02' });
   check('老库上能记第一笔流水', s.trades.length === 1, s.trades.length);
   const derived = await s.applyDerivedPositions();
@@ -1217,7 +1266,7 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('meta 标出 3日K', r.lines[0].meta.has.includes('3日K指标'), r.lines[0].meta.has);
 
     check('done 带回结构化计划', done.plan && done.plan.stance === '偏多' && done.plan.levels.length === 2, done.plan);
-    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v4', done.promptVersion);
+    check('done 带回 prompt 版本', done.promptVersion === 'stock-analysis-v5', done.promptVersion);
     check('关键价位自动转成两条预警', done.alerts === 2 && Array.isArray(done.alertIds) && done.alertIds.length === 2, done.alerts);
 
     const st = await call(ctx, '/state');
@@ -1229,7 +1278,7 @@ section('AI 分析：3日K 聚合 + 自动设预警 + 计划快照（本地打�
     check('预警备注标明来自 AI', aiAlerts.every((a) => /^AI /.test(a.note || '')), aiAlerts.map((a) => a.note));
 
     const one = await call(ctx, `/ai/history/get?id=${done.recordId}`);
-    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v4', one.json.item.promptVersion);
+    check('历史里存了 prompt 版本', one.json.item.promptVersion === 'stock-analysis-v5', one.json.item.promptVersion);
     check('历史里存了结构化计划', one.json.item.plan && one.json.item.plan.stance === '偏多', one.json.item.plan);
     check('历史里存了数据快照', typeof one.json.item.pack === 'string' && one.json.item.pack.includes('【3日K指标】'),
       one.json.item.pack ? one.json.item.pack.length : one.json.item.pack);

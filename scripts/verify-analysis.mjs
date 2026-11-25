@@ -11,7 +11,8 @@
 import {
   sma, stdev, changePctOf,
   summarizeCandles, condenseCandles, summarizeTrends, summarizeBook,
-  summarizeTrades, summarizeFundFlow, summarizeHoldings, summarizeShares, buildDataPack, buildMessages, describePack,
+  summarizeTrades, summarizeFundFlow, summarizeHoldings, summarizeShares,
+  summarizeSector, summarizeFundamentals, buildDataPack, buildMessages, describePack,
   aggregateCandles, parsePlan, stripPlan, PROMPT_VERSION, SYSTEM_PROMPT, parseAutoTimes,
   DEFAULT_KLINE_BARS,
 } from '../lib/analysis.js';
@@ -339,7 +340,7 @@ section('结构化计划解析（parsePlan / stripPlan）');
   check('stripPlan 去掉了 json 块', !stripPlan(text).includes('```') && stripPlan(text).includes('偏多'), stripPlan(text));
   check('没有 JSON 时返回 null', parsePlan('只看量能，没有结论块。') === null, null);
   check('坏 JSON 返回 null', parsePlan('```json\n{not json}\n```') === null, null);
-  check('PROMPT_VERSION 升到 v4', PROMPT_VERSION === 'stock-analysis-v4', PROMPT_VERSION);
+  check('PROMPT_VERSION 升到 v5', PROMPT_VERSION === 'stock-analysis-v5', PROMPT_VERSION);
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +463,65 @@ section('结构化计划解析（parsePlan / stripPlan）');
     parseAutoTimes(['09:35', '09:35', '1:5']));
   check('非法项丢弃、空输入返回空', parseAutoTimes('25:00,abc,12:70').length === 0
     && parseAutoTimes('').length === 0 && parseAutoTimes(null).length === 0, null);
+}
+
+// ---------------------------------------------------------------------------
+// 板块对照 + 基本面（AI 数据包）
+// ---------------------------------------------------------------------------
+{
+  console.log('\n-- 板块对照 + 基本面 --');
+  // 细分板块与上级板块数字全同时合并（航空装备Ⅲ/Ⅱ 涨跌/主力/家数完全一样）
+  const boardsData = {
+    symbol: 'sh600893',
+    boards: [
+      { code: 'BK1384', name: '航空装备Ⅲ', chgPct: 1.07, mainInflow: 145040195, upCount: 40, downCount: 8 },
+      { code: 'BK1231', name: '航空装备Ⅱ', chgPct: 1.07, mainInflow: 145040195, upCount: 40, downCount: 8 },
+      { code: 'BK1204', name: '国防军工', chgPct: 0.73, mainInflow: -20880336, upCount: 106, downCount: 32 },
+      { code: 'BK0165', name: '陕西板块', chgPct: 0.49, mainInflow: -114040896, upCount: 50, downCount: 32 },
+    ],
+  };
+  const st = summarizeSector(boardsData);
+  check('板块摘要保留去重后的行', st && st.rows.length === 3, st && st.rows.map((r) => r.name).join('/'));
+  check('首个板块（主力板块）是细分行业', st.primary.name === '航空装备Ⅲ', st.primary && st.primary.name);
+  check('板块摘要没有数据返回 null', summarizeSector({ boards: [] }) === null, null);
+
+  const fund = summarizeFundamentals({
+    peTtm: 21.1, pb: 6.69, totalMarket: 1813868403051, roe: 24.47,
+    revenueYoy: 1.82, profitYoy: -0.247, grossMargin: 89.58, debtRatio: 11.9,
+  });
+  check('基本面摘要保留有限数字', fund && fund.peTtm === 21.1 && fund.roe === 24.47, fund && Object.keys(fund).length);
+  check('全空基本面返回 null', summarizeFundamentals({}) === null, null);
+
+  const pack = buildDataPack({
+    symbol: 'sh600893', name: '航发动力', code: '600893',
+    quote: { price: 40.12, changePct: -0.3, provider: 'eastmoney' },
+    sectorSummary: st,
+    fundSummary: fund,
+    asOf: new Date('2026-11-11T06:17:00Z'),
+  });
+  check('数据包含【所属板块】', pack.text.includes('【所属板块'), null);
+  check('板块带涨跌/主力/家数', pack.text.includes('航空装备Ⅲ(BK1384)') && pack.text.includes('40涨/8跌')
+    && pack.text.includes('主力'), null);
+  check('板块段算了个股超额', pack.text.includes('个股相对首个板块') && pack.text.includes('-1.37%'), null);
+  check('数据包含【基本面】', pack.text.includes('【基本面'), null);
+  check('基本面带估值与盈利', pack.text.includes('PE(TTM) 21.10') && pack.text.includes('ROE +24.47%')
+    && pack.text.includes('营收同比 +1.82%') && pack.text.includes('总市值 18139亿'), null);
+  check('基本面注明报告期滞后', pack.text.includes('滞后一个季度'), null);
+  check('meta.has 记录板块/基本面', pack.meta.has.includes('板块') && pack.meta.has.includes('基本面'),
+    pack.meta.has.join(','));
+  const desc = describePack(pack.meta);
+  check('describePack 显示板块与基本面', desc.includes('所属板块涨跌') && desc.includes('基本面快照'), desc);
+  check('prompt 里要求引用板块数字判断板块性', SYSTEM_PROMPT.includes('板块性还是个股性'), null);
+
+  // ETF：proxy 口径
+  const etfPack = buildDataPack({
+    symbol: 'sh515050', name: '通信ETF华夏', code: '515050',
+    quote: { price: 0.71, changePct: 0.5, provider: 'eastmoney' },
+    sectorSummary: { proxy: '第一大重仓股 中兴通讯 的所属板块对照', rows: st.rows },
+    asOf: new Date('2026-11-11T06:17:00Z'),
+  });
+  check('ETF 板块段注明重仓股代理口径', etfPack.text.includes('注：第一大重仓股'), null);
+  check('ETF 板块段没有超额行（quote 在但 proxy 前提变了也照算）', etfPack.text.includes('个股相对首个板块'), null);
 }
 
 console.log(`\n==== 通过 ${pass} / 失败 ${fail} ====`);

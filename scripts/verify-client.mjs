@@ -337,6 +337,8 @@ const ALL_CANDLES = mkCandles(800);
 const fetchLog = [];
 /** 拖动排序请求体（按到达顺序记录），供行情条拖动排序断言用 */
 const reorderLog = [];
+/** 行情保存请求体（按到达顺序记录），供 📌 上/下行情条断言用 */
+const itemSaveLog = [];
 /** 故障注入。null = 正常；'auth' = 宿主路由不存在，DSH 回 401；
  *  'offline' = 本地服务没起来，fetch 直接 reject。 */
 let FAULT = null;
@@ -546,6 +548,22 @@ function fakeFetch(url, init = {}) {
   } else if (u.includes('/equity')) {
     body = { ok: true, snapshots: STATE.equitySnapshots || [] };
   } else if (u.includes('/search')) body = { ok: true, hits: [] };
+  else if (u.includes('/items/save')) {
+    // 宿主契约：POST /items/save {symbol,...patch} -> { ok:true, item, state }
+    let patch = {};
+    try { patch = JSON.parse(init.body || '{}'); } catch { /* 空补丁 */ }
+    itemSaveLog.push(patch);
+    const it = STATE.items.find((x) => x.symbol === patch.symbol);
+    if (it && patch.onStrip !== undefined) {
+      it.onStrip = !!patch.onStrip;
+      if (it.onStrip) {
+        if (!STATE.strip.some((x) => x.symbol === it.symbol)) STATE.strip.push(it);
+      } else {
+        STATE.strip = STATE.strip.filter((x) => x.symbol !== it.symbol);
+      }
+    }
+    body = { ok: true, item: it, state: STATE };
+  }
   else if (u.includes('/items/reorder')) {
     // 宿主契约：POST /items/reorder { order:[symbol,...] } -> { ok:true, state }
     let patch = {};
@@ -580,12 +598,19 @@ const lineCalls = [];
 const rectCalls = [];
 const ctxCalls = [];
 const styleTags = [];
+/** 假 DSH 会话视图标签行（data-conversation-tabs 锚点）。null = 页面上没有
+ *  tab 行（client 端回落到固定停靠点）。测试里赋一个带 getBoundingClientRect
+ *  的节点来模拟宿主渲染出的标签行。 */
+let tabsRowAnchor = null;
 /** 所有 document.createElement 出来的节点。K 线 canvas 是命令式创建再挂到 ref 上的，
  *  不在 React 树里，只能靠这个登记表找到。 */
 const createdEls = [];
 
 function makeCtx2d(node) {
   const store = { canvas: node };
+  // 除了全局 drawCalls，还按 canvas 单独计数：分层缓存要验证「悬停时主画布只有
+  // 一次 drawImage + 少量悬停层绘制」，光看全局总数分不清是哪个画布画的。
+  const bump = () => { drawCalls++; node.__drawCalls = (node.__drawCalls || 0) + 1; };
   return new Proxy(store, {
     get(t, k) {
       if (typeof k === 'symbol') return undefined;
@@ -593,9 +618,17 @@ function makeCtx2d(node) {
       if (k === 'measureText') return () => ({ width: 8 });
       if (k === 'createLinearGradient' || k === 'createRadialGradient') return () => ({ addColorStop() {} });
       if (k === 'getImageData') return () => ({ data: new Uint8ClampedArray(4) });
+      if (k === 'drawImage') {
+        return (img, ...rest) => {
+          bump();
+          ctxCalls.push('drawImage');
+          (node.__drawImages = node.__drawImages || []).push([img, ...rest]);
+          return undefined;
+        };
+      }
       if (k === 'fillText' || k === 'strokeText') {
         return (text, x, y) => {
-          drawCalls++;
+          bump();
           textCalls.push(String(text));
           textPos.push([String(text), x, y]);
           return undefined;
@@ -603,15 +636,15 @@ function makeCtx2d(node) {
       }
       if (k === 'moveTo' || k === 'lineTo') {
         return (x, y) => {
-          drawCalls++;
+          bump();
           lineCalls.push([k, x, y]);
           return undefined;
         };
       }
       if (k === 'fillRect') {
-        return (x, y, w, h) => { drawCalls++; rectCalls.push([x, y, w, h]); return undefined; };
+        return (x, y, w, h) => { bump(); rectCalls.push([x, y, w, h]); return undefined; };
       }
-      return (...args) => { drawCalls++; ctxCalls.push(k); void args; return undefined; };
+      return (...args) => { bump(); ctxCalls.push(k); void args; return undefined; };
     },
     set(t, k, v) { t[k] = v; return true; },
   });
@@ -711,6 +744,7 @@ const document = {
   querySelector(sel) {
     const m = /style\[data-plugin-css=["']?(.+?)["']?\]/.exec(String(sel));
     if (m) return styleTags.find((s) => s.dataset.pluginCss === m[1]) || null;
+    if (String(sel) === '[data-conversation-tabs]') return tabsRowAnchor;
     return null;
   },
   querySelectorAll: () => [],
@@ -775,6 +809,12 @@ const window = {
     const a = windowListeners.get(type) || [];
     windowListeners.set(type, a.filter((f) => f !== fn));
   },
+  // 停靠跟随用（真浏览器有；沙箱里走同一套 shim，测试不 pump 也不会触发）
+  setInterval: setIntervalShim,
+  clearInterval: clearIntervalShim,
+  // 停靠跟随靠 rAF 合帧（同一帧里多次 bump 只重渲一次）
+  requestAnimationFrame: (fn) => setTimeout(() => fn(Date.now()), 0),
+  cancelAnimationFrame: (id) => clearTimeout(id),
   matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   getComputedStyle,
   location: { href: 'http://127.0.0.1:19387/', origin: 'http://127.0.0.1:19387' },
@@ -795,6 +835,16 @@ class ResizeObserver {
   constructor(cb) { this.cb = cb; }
   observe() {} unobserve() {} disconnect() {}
 }
+
+// MutationObserver 替身：记录活着的实例，测试可以手动触发（真浏览器里
+// 换页 / tab 行挂上挂下时宿主会自己回调）。停靠跟随靠它感知「换页」。
+const mutationObservers = [];
+class MutationObserver {
+  constructor(cb) { this.cb = cb; this.dead = false; mutationObservers.push(this); }
+  observe(target, opts) { this.target = target; this.opts = opts; }
+  disconnect() { this.dead = true; }
+}
+const aliveObservers = () => mutationObservers.filter((o) => !o.dead);
 
 const requestAnimationFrame = (fn) => {
   if (rafCount++ > 4) return 0;
@@ -983,7 +1033,7 @@ check('没有裸 npm 依赖（只允许 react / react-dom）',
   (code.match(/require\(['"][^'"]+['"]\)/g) || []));
 
 const sandboxGlobals = {
-  window, document, fetch: fakeFetch, getComputedStyle, ResizeObserver,
+  window, document, fetch: fakeFetch, getComputedStyle, ResizeObserver, MutationObserver,
   requestAnimationFrame, cancelAnimationFrame,
   setInterval: setIntervalShim, clearInterval: clearIntervalShim,
   setTimeout, clearTimeout, localStorage, console,
@@ -1105,6 +1155,33 @@ const rootNode = findByClass(tree, 'dst-root')[0];
 check('顶栏钉在 Windows 标题栏下方（top=40px + 偏移 6px）',
   rootNode && rootNode.props.style && /46px/.test(String(rootNode.props.style.top)),
   rootNode && rootNode.props.style);
+
+section('行情条沉浸态（空闲退场，悬停亮操作）');
+{
+  const cssOf = (sel) => {
+    const m = styleTags[0].textContent.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\{([^}]*)\\}'));
+    return m ? m[1] : '';
+  };
+  const barCss = cssOf('.dst-bar');
+  const revealCss = cssOf('.dst-bar:hover,.dst-bar:focus-within,.dst-bar.dst-open,.dst-bar.dst-dragging');
+  check('空闲态不要边框（边框透明）', /border:1px solid transparent/.test(barCss), barCss);
+  check('空闲态不要底色（周围不发光）', /background-color:transparent/.test(barCss) && /box-shadow:none/.test(barCss)
+    && !/filter:opacity/.test(barCss), barCss);
+  check('悬停/展开/拖动才亮出面板底和边框', /background-color:var\(--dst-base\)/.test(revealCss)
+    && /border-color:var\(--dst-border\)/.test(revealCss), revealCss);
+  const dragCss = cssOf('.dst-drag');
+  check('空闲态拖动把手收起（宽度折掉）', /max-width:0/.test(dragCss) && /opacity:0/.test(dragCss), dragCss);
+  check('把手在悬停/展开/拖动中滑出', /\.dst-bar\.dst-open \.dst-drag/.test(styleTags[0].textContent), null);
+  const allCss = styleTags[0].textContent;
+  check('空闲态时段时钟退场', /\.dst-bar \.dst-session\{opacity:0/.test(allCss), null);
+  check('空闲态时钟连宽度一起折掉（数据贴左）', /\.dst-bar \.dst-session\{[^}]*max-width:0/.test(allCss), null);
+  check('空闲态品牌块退场', /\.dst-bar \.dst-brand\{opacity:0/.test(allCss), null);
+  check('空闲态品牌块连宽度一起折掉（数据贴左）', /\.dst-bar \.dst-brand\{[^}]*max-width:0/.test(allCss), null);
+  check('空闲态操作按钮退场', /\.dst-bar \.dst-actions\{opacity:0/.test(allCss), null);
+  check('空闲态操作按钮连宽度一起折掉', /\.dst-bar \.dst-actions\{[^}]*max-width:0/.test(allCss), null);
+  check('悬停命中区有稳定的 ::before 覆盖（防闪烁）', /\.dst-bar::before\{[^}]*pointer-events:auto/.test(allCss), null);
+  check('dst-solid（空闲透明关）带面板底和边框', /\.dst-bar\.dst-solid\{[^}]*background-color:var\(--dst-base\)/.test(allCss), null);
+}
 
 section('行情条拖动排序');
 {
@@ -1334,6 +1411,53 @@ section('表格工具条 / 排序 / 搜索 / 汇总');
     findByClass(tree, 'dst-tablefoot').length);
 }
 
+section('📌 每只标的可单独决定上不上行情条');
+{
+  const pinOf = (tr) => collect(tr).find((n) => n.tag === 'button' && allText(n.kids).trim() === '📌');
+  const rows = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function');
+  check('每行都有 📌 按钮', rows.length > 0 && rows.every((r) => !!pinOf(r)), rows.length);
+  const pins = rows.map(pinOf);
+  check('默认都上行情条（没有灰钉子）',
+    pins.every((b) => !String(b.props.className || '').includes('dst-pin-off')), null);
+  check('钉子 title 说明功能', /行情条/.test(String(pins[0].props.title || '')), pins[0].props.title);
+
+  // 下条：strip 里消失、钉子变灰
+  const beforeSaves = itemSaveLog.length;
+  const stripLen0 = STATE.strip.length;
+  pins[0].props.onClick({ preventDefault() {}, stopPropagation() {} });
+  await settle(12);
+  check('点钉子发了 /items/save（onStrip=false）',
+    itemSaveLog.length === beforeSaves + 1 && itemSaveLog[itemSaveLog.length - 1].onStrip === false,
+    itemSaveLog[itemSaveLog.length - 1]);
+  const offSym = itemSaveLog[itemSaveLog.length - 1].symbol;
+  const offItem = STATE.items.find((x) => x.symbol === offSym);
+  check('清单里这只被标 onStrip=false', offItem && offItem.onStrip === false, offItem && offItem.onStrip);
+  check('strip 里不再有这只', !STATE.strip.some((x) => x.symbol === offSym),
+    { before: stripLen0, after: STATE.strip.length });
+  const rows2 = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function');
+  const row2 = rows2.find((r) => allText(r.kids).includes(offItem.name));
+  check('下条后钉子变灰', !!row2 && String(pinOf(row2).props.className || '').includes('dst-pin-off'),
+    row2 && pinOf(row2).props.className);
+  check('灰钉子的 title 换成「钉回行情条」',
+    !!row2 && /钉回/.test(String(pinOf(row2).props.title || '')), row2 && pinOf(row2).props.title);
+  const countNote = findByClass(tree, 'dst-note').map((n) => allText(n.kids)).find((t) => /只/.test(t) && /看/.test(t)) || '';
+  check('面板头部「只在看」计数跟着变',
+    new RegExp(`${STATE.strip.length}\\s*只`).test(countNote),
+    findByClass(tree, 'dst-note').map((n) => allText(n.kids)).slice(0, 2));
+
+  // 钉回：strip 里回来、钉子恢复
+  pinOf(row2).props.onClick({ preventDefault() {}, stopPropagation() {} });
+  await settle(12);
+  check('再点钉回（onStrip=true）',
+    itemSaveLog.length === beforeSaves + 2 && itemSaveLog[itemSaveLog.length - 1].onStrip === true,
+    itemSaveLog[itemSaveLog.length - 1]);
+  check('strip 里又有这只了', STATE.strip.some((x) => x.symbol === offSym), STATE.strip.length);
+  const rows3 = collect(tree).filter((n) => n.tag === 'tr' && typeof n.props.onClick === 'function');
+  const row3 = rows3.find((r) => allText(r.kids).includes(offItem.name));
+  check('钉回后钉子恢复亮色', !!row3 && !String(pinOf(row3).props.className || '').includes('dst-pin-off'), null);
+  check('CSS 里有灰钉子样式', styleTags[0].textContent.includes('.dst-pin-off'), null);
+}
+
 section('面板外壳');
 {
   const head = findByClass(tree, 'dst-panel-head');
@@ -1429,12 +1553,13 @@ section('拖动行情条');
       Number.isFinite(Number(STATE.settings.topPct)) && Number(STATE.settings.topPct) > 0,
       { topPct: STATE.settings.topPct });
     check('拖动结束后不再挂着 dst-dragging', findByClass(tree, 'dst-dragging').length === 0, null);
-    // 再拖一次、故意拖出右边界：条不能被拖出视口（视口 1440、条 720 → 上限 700）
+    // 再拖一次、故意拖出右边界：夹取放宽为「至少留 120px 在视口」
+    // （视口 1440 → 上限 1320，用户可以拖到贴边/半出界的位置）
     dragProps().onPointerDown({ button: 0, clientX: 10, clientY: 0, pointerId: 2, currentTarget: fake(), preventDefault() {} });
     dragProps().onPointerMove({ clientX: 3000, clientY: 0, pointerId: 2 });
     dragProps().onPointerUp({ clientX: 3000, clientY: 0, pointerId: 2, currentTarget: fake() });
     await settle(8);
-    check('拖出右边界时被夹回视口内', Number(STATE.settings.leftOffset) === 700, { left: STATE.settings.leftOffset });
+    check('拖出右边界时留 120px 在视口内（上限 1320）', Number(STATE.settings.leftOffset) === 1320, { left: STATE.settings.leftOffset });
 
     // === 回归：拖进窗口标题栏后 pointerup 丢了，不能把界面卡在拖动态 ===
     // 先把位置摆回 10/100 像素并清掉百分比，再模拟「往上拖」：上界必须是 0（标题栏是原生拖窗区）
@@ -1519,6 +1644,195 @@ section('拖动行情条');
       { before: mlBefore, after: mlAfter });
     window.innerWidth = 1440;
     documentElement.clientWidth = prevW;
+  }
+}
+
+section('行情条停靠会话视图');
+{
+  const barOf = () => collect(tree).find((n) => String(n.props && n.props.className || '').startsWith('dst-bar'));
+  const rootOf = () => collect(tree).find((n) => String(n.props && n.props.className || '').includes('dst-root'));
+  const dragProps = () => (collect(tree)
+    .find((n) => String(n.props && n.props.className || '') === 'dst-drag') || { props: {} }).props;
+  const fake = () => ({ setPointerCapture() {}, releasePointerCapture() {} });
+
+  check('默认自由拖动（未停靠）', STATE.settings.barDocked !== true, STATE.settings.barDocked);
+  const dockBtn = collect(tree).find((n) => String(n.props && n.props.title || '').includes('嵌入会话视图'));
+  check('操作区有停靠按钮（⚓，悬停才亮出所以看 title）', !!dockBtn, dockBtn && dockBtn.props.title);
+  if (dockBtn) {
+    // 拖动段把视口恢复成了 720（mock 默认）；这里抬回 1440 桌面宽，
+    // 夹取 winW-120=1320 才不会把嵌进标签行的位置夹掉
+    documentElement.clientWidth = 1440;
+    window.innerWidth = 1440;
+    // 宿主渲染出的会话视图标签行（对话/轨迹/上下文 tab 行，官方锚点 data-conversation-tabs）
+    const anchor = makeNode('div');
+    anchor.__attrs['data-conversation-tabs'] = '';
+    let rowRect = { left: 248, top: 104, right: 920, bottom: 132, width: 672, height: 28, x: 248, y: 104 };
+    anchor.getBoundingClientRect = () => ({ ...rowRect });
+    // 行内第一个 tab 按钮：垂直对齐基准（矩形中心≈文字中心）。
+    // 按钮 35px 高、上沿比行 rect 高 10px（margin-top:-10px 的收缩）。
+    let btnRect = { left: 240, top: 98, right: 285, bottom: 133, width: 45, height: 35, x: 240, y: 98 };
+    const tabBtn = makeNode('button');
+    tabBtn.__attrs['role'] = 'tab';
+    tabBtn.getBoundingClientRect = () => ({ ...btnRect });
+    anchor.querySelector = (sel) => (String(sel) === '[role="tab"]' ? tabBtn : null);
+    // tab 行的兄弟节点 =「⋯ 浏览更多插件」按钮（ViewsMoreMenu，渲染在
+    // data-conversation-tabs 之外）——条只贴行尾会盖住它（用户实测），
+    // 停靠基准要取它和行右缘的较大者。
+    let sibRect = { left: 920, top: 98, right: 944, bottom: 133, width: 24, height: 35, x: 920, y: 98 };
+    const sib = makeNode('div');
+    sib.getBoundingClientRect = () => ({ ...sibRect });
+    anchor.nextElementSibling = sib;
+    // tab 行的父元素 = 中央列。打开右侧侧边栏后中央列变窄，列右缘
+    // 不再是窗口右缘——停靠点的右边界和条宽都要按它夹（用户实测：
+    // 打开右侧侧边栏时条伸进侧边栏）。这里默认给满宽，后面单独测窄列。
+    let colRect = { left: 240, top: 90, right: 1440, bottom: 900, width: 1200, height: 810, x: 240, y: 90 };
+    const col = makeNode('div');
+    col.getBoundingClientRect = () => ({ ...colRect });
+    anchor.parentElement = col;
+    tabsRowAnchor = anchor;
+    dockBtn.props.onClick();
+    await settle(12);
+    check('点 ⚓ 写回设置（barDocked=true）', STATE.settings.barDocked === true, STATE.settings.barDocked);
+    // 停靠跟随改成事件驱动（resize / ResizeObserver / MutationObserver），
+    // 不再用 500ms 定时器轮询量位置 —— 空闲时不该有定时器在跑
+    check('停靠跟随不再靠 500ms 轮询（无 500ms 定时器）',
+      ![...intervals.values()].some((x) => x.ms === 500),
+      [...intervals.values()].map((x) => x.ms));
+    // 换页（tab 行被摘掉 / 挂回来）只有 DOM 变更能感知 → 停靠时必须挂着一个 MutationObserver
+    check('停靠时挂了 MutationObserver 感知换页', aliveObservers().length > 0,
+      aliveObservers().map((o) => o.opts));
+    // MutationObserver 挂在 document.body 整棵子树上，宿主打字/流式输出/弹提示
+    // 都会回调——每次回调都 setDockTick 等于把整个条重渲染一遍，切页会卡。
+    // 现在先比「标签行指纹」，位置真变了才重渲染。
+    check('停靠跟随先比标签行指纹，位置没变不重渲染',
+      source.includes('const dockSig = (r0) =>')
+      && source.includes('if (sig === lastSig) return;')
+      && source.includes('let lastSig = dockSig();'), null);
+    // 打开 / 收起右侧侧边栏时中央列被动画连续撑开，200ms 里每帧尺寸都不同：
+    // 不加节流就会每帧整条重渲染（用户反馈「打开侧边栏时会卡一下」）。
+    // 现在两次真正重渲染之间至少隔 DOCK_MIN_GAP，动画停下来再补最后一次。
+    check('侧边栏动画期间限制重渲染频率（节流 + 尾帧补渲染）',
+      source.includes('const DOCK_MIN_GAP = 120;')
+      && source.includes('if (elapsed < DOCK_MIN_GAP) {')
+      && source.includes('trailing = setTimeout(() => {'), null);
+    // 量不到标签行时立刻就收（不等下一帧），否则切页瞬间会看到条
+    // 还浮在新页面上再缩回去
+    check('量不到标签行时立刻收胶囊（不等下一帧）',
+      /const row = tabsRowRect\(\);/.test(source)
+      && /if \(!row\) \{/.test(source), null);
+    // 嵌入标签行：基准右缘取 max(行 920, ⋯按钮 944)=944，+12 间距再扣条
+    // 自身 margin-left 10 → 946；与 tab 文字垂直居中（按钮矩形 98..133
+    // 中心 115.5，条兜底 34 → 115.5-17=98.5 → round 99，再扣 margin-top 6 → 93）
+    check('停靠后条嵌进标签行（避开 ⋯ 按钮）、与 tab 文字居中（top=93px / left=946px）',
+      !!rootOf() && String(rootOf().props.style.top) === '93px'
+      && !!barOf() && String(barOf().props.style.marginLeft) === '946px',
+      { top: rootOf() && rootOf().props.style.top, left: barOf() && barOf().props.style.marginLeft });
+    // 窗口缩放 / 侧栏开合 → 行动了 → 条跟着走（resize 触发重测）
+    rowRect = { left: 248, top: 130, right: 1100, bottom: 158, width: 852, height: 28, x: 248, y: 130 };
+    btnRect = { left: 240, top: 124, right: 285, bottom: 159, width: 45, height: 35, x: 240, y: 124 };
+    sibRect = { left: 1100, top: 124, right: 1124, bottom: 159, width: 24, height: 35, x: 1100, y: 124 };
+    dispatchWindow('resize');
+    await settle(12);
+    check('标签行移动后条跟随（top=119px / left=1126px）',
+      String(rootOf().props.style.top) === '119px'
+      && String(barOf().props.style.marginLeft) === '1126px',
+      { top: rootOf().props.style.top, left: barOf().props.style.marginLeft });
+    // 停靠时宽度夹到窗口右缘：1440-1126-12=302 —— 否则条伸出屏外，
+    // 轨道量不出溢出，跑马灯不滚（用户反馈：缩小窗口时滚动失效）
+    check('停靠时条宽夹到窗口右缘（maxWidth=302px，轨道溢出跑马灯才滚）',
+      String(barOf().props.style.maxWidth) === '302px'
+      && !!String(barOf().props.className).includes('dst-bar'),
+      barOf().props.style.maxWidth);
+    // 打开右侧侧边栏 → 中央列变窄（列右缘 1100，右边 340px 归侧边栏）。
+    // 标签行铺到列右缘附近（行尾 1000、⋯ 按钮到 1024），行尾后面放不下条，
+    // 不能再按窗口右缘铺开（会横穿到侧边栏上，用户实测「打开右侧这个
+    // 侧边栏就超出」）→ 换行到标签行下面、按列宽铺开：
+    //   left = 行左 248+2 = 250、top = 行底 158+4-6 = 156、
+    //   maxWidth = 列右缘 1100 - 250 - 12 = 838
+    colRect = { left: 240, top: 90, right: 1100, bottom: 900, width: 860, height: 810, x: 240, y: 90 };
+    rowRect = { left: 248, top: 130, right: 1000, bottom: 158, width: 752, height: 28, x: 248, y: 130 };
+    btnRect = { left: 240, top: 124, right: 285, bottom: 159, width: 45, height: 35, x: 240, y: 124 };
+    sibRect = { left: 1000, top: 124, right: 1024, bottom: 159, width: 24, height: 35, x: 1000, y: 124 };
+    dispatchWindow('resize');
+    await settle(12);
+    check('右侧侧边栏打开（列变窄）时条换行、不伸进侧边栏（top=156px / left=250px / maxWidth=838px）',
+      String(rootOf().props.style.top) === '156px'
+      && String(barOf().props.style.marginLeft) === '250px'
+      && String(barOf().props.style.maxWidth) === '838px',
+      { top: rootOf().props.style.top, left: barOf().props.style.marginLeft, maxWidth: barOf().props.style.maxWidth });
+    check('换行时条左端不越过列左缘、右端不越过列右缘',
+      parseFloat(barOf().props.style.marginLeft) + 10 >= colRect.left
+      && parseFloat(barOf().props.style.marginLeft) - 10 + parseFloat(barOf().props.style.maxWidth) <= colRect.right,
+      { left: barOf().props.style.marginLeft, maxWidth: barOf().props.style.maxWidth });
+    // 关掉右侧侧边栏 → 列恢复满宽 → 条回到贴着标签行行尾的居中位置
+    colRect = { left: 240, top: 90, right: 1440, bottom: 900, width: 1200, height: 810, x: 240, y: 90 };
+    rowRect = { left: 248, top: 130, right: 1100, bottom: 158, width: 852, height: 28, x: 248, y: 130 };
+    sibRect = { left: 1100, top: 124, right: 1124, bottom: 159, width: 24, height: 35, x: 1100, y: 124 };
+    dispatchWindow('resize');
+    await settle(12);
+    check('关掉右侧侧边栏后条回到行尾居中（top=119px / left=1126px / maxWidth=302px）',
+      String(rootOf().props.style.top) === '119px'
+      && String(barOf().props.style.marginLeft) === '1126px'
+      && String(barOf().props.style.maxWidth) === '302px',
+      { top: rootOf().props.style.top, left: barOf().props.style.marginLeft, maxWidth: barOf().props.style.maxWidth });
+    // 先把上一段点开的面板关掉（收起胶囊只在面板关着时生效——开着面板时
+    // 收起会把面板一起卸掉，闪没）
+    const brandToClose = collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-brand');
+    if (brandToClose && typeof brandToClose.props.onClick === 'function') brandToClose.props.onClick();
+    await settle(8);
+    // 换页那一瞬间：旧页面的 tab 行还挂在 DOM 里但已不可见（矩形全 0）。
+    // 不把它当「量不到」的话，条会被摆到左上角、过一帧才收起，看着就是
+    // 「切页先卡一下再缩成胶囊」（用户实测）。矩形全 0 必须等同 null。
+    rowRect = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
+    btnRect = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
+    dispatchWindow('resize');
+    await settle(12);
+    check('标签行不可见（矩形全 0）时当量不到、直接收胶囊，不摆到左上角',
+      !!collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-dock')
+      && !barOf(),
+      { pill: !!collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-dock'), bar: !!barOf() });
+    // 切到非会话页（量不到 tab 行，比如「插件」页）→ 收回右上角折叠胶囊，
+    // 不再按回落坐标横在别的页面上（用户实测「乱套」）。
+    // 面板关着时上一段已经是胶囊态，这里要先把 tab 行恢复回来、重新展开，
+    // 保证「离开会话页」这条走的是真实路径（条在 → 切页 → 收）
+    rowRect = { left: 248, top: 130, right: 1100, bottom: 158, width: 852, height: 28, x: 248, y: 130 };
+    btnRect = { left: 240, top: 124, right: 285, bottom: 159, width: 45, height: 35, x: 240, y: 124 };
+    dispatchWindow('resize');
+    await settle(12);
+    tabsRowAnchor = null;
+    dispatchWindow('resize');
+    await settle(12);
+    const dockPill = collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-dock');
+    check('离开会话页自动收回折叠胶囊（dst-dock 出现、dst-bar 消失）',
+      !!dockPill && !barOf() && /停靠中/.test(String(dockPill.props.title || '')),
+      { pill: !!dockPill, bar: !!barOf(), title: dockPill && dockPill.props.title });
+    // 非会话页点胶囊 = 想看行情 → 展开并解除停靠（不会按回落坐标横在页面上）
+    dockPill.props.onClick();
+    await settle(12);
+    check('非会话页点收起胶囊：展开并解除停靠',
+      STATE.settings.barDocked === false && STATE.settings.collapsed === false
+      && !!barOf(),
+      { docked: STATE.settings.barDocked, collapsed: STATE.settings.collapsed, bar: !!barOf() });
+    // 回到会话页重新停靠，继续验证「按把手解除停靠」的既有行为
+    tabsRowAnchor = anchor;
+    dispatchWindow('resize');
+    await settle(12);
+    const dockBtn2 = collect(tree).find((n) => String(n.props && n.props.title || '').includes('嵌入会话视图'));
+    dockBtn2.props.onClick();
+    await settle(12);
+    check('回到会话页可重新停靠', STATE.settings.barDocked === true, STATE.settings.barDocked);
+    // 停靠中按住把手 = 想挪位置 → 自动解除停靠，再从停靠点继续拖
+    dragProps().onPointerDown({ button: 0, clientX: 240, clientY: 86, pointerId: 9, currentTarget: fake(), preventDefault() {} });
+    await settle(6);
+    check('停靠中按住把手拖动自动解除停靠', STATE.settings.barDocked === false, STATE.settings.barDocked);
+    // window 兜底监听收尾（pointerup），别把界面卡在拖动态
+    for (const fn of (windowListeners.get('pointerup') || []).slice()) fn({});
+    await settle(8);
+    check('解除停靠后拖动收尾、不再卡拖动态', findByClass(tree, 'dst-dragging').length === 0, null);
+    // 收起胶囊检查时把面板关了；后面的副图/成本线等章节还要用面板 → 重新点开
+    const brandToReopen = collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-brand');
+    if (brandToReopen && typeof brandToReopen.props.onClick === 'function') brandToReopen.props.onClick();
+    await settle(8);
   }
 }
 
@@ -1900,6 +2214,113 @@ section('K线副图指标（MACD / KDJ / RSI）');
   check('切回 MACD 后副图读数恢复',
     textCalls.slice(beforeBack).some((t) => String(t).includes('MACD(12,26,9)')),
     textCalls.slice(beforeBack).slice(-14));
+}
+
+section('性能：指标缓存命中（同一批 K 线不重复算）');
+{
+  // 指标（MA / MACD / KDJ / RSI）每次重绘都要用，以前每次绘制都重算一遍。
+  // 现在按「K 线数组本身」缓存（WeakMap 键，换一批数据自动回收）。
+  const flat = source.replace(/\s+/g, ' ');
+  check('有按数组缓存的工具（WeakMap 键，换数据自动回收）',
+    /const indicatorCache = new WeakMap\(\)/.test(flat)
+    && /function cachedIndicator\(candles, key, build\)/.test(flat), null);
+  check('computeMA 走缓存',
+    /function computeMA\(candles, n\) \{ return cachedIndicator\(candles, `ma:\$\{n\}`/.test(flat)
+    || /function computeMA\(candles, n\) \{\s*return cachedIndicator/.test(source), null);
+  check('MACD / KDJ / RSI 三个副图指标都走缓存',
+    ["'macd'", "'kdj'", "'rsi'"].every((k) => flat.includes(`cachedIndicator(candles, ${k},`)),
+    ["'macd'", "'kdj'", "'rsi'"].filter((k) => !flat.includes(`cachedIndicator(candles, ${k},`)));
+  // 关键设计：指标按「整段」算完再切片。若按切片后的小数组算，
+  // 每次框选都是新数组 → 缓存永远打不中，而且框选左端会缺一截均线。
+  check('指标按整段算再切片（不然框选后缓存永远打不中）',
+    /function sliceSeries\(built, offset, count\)/.test(flat)
+    && /const full = o\.fullCandles \|\| candles/.test(flat)
+    && /sliceSeries\(def\.build\(full\), off, candles\.length\)/.test(flat), null);
+  check('drawChart 把整段数据 + 偏移传给副图',
+    /fullCandles: candles, offset: viewStart/.test(flat), null);
+
+  // 功能层面：同一批数据反复进出 KDJ，读数必须完全一致（缓存不能串味）。
+  // 中间先切到 RSI 再切回来，保证每次都是「重新进入 KDJ」真的触发重绘。
+  const subSel2 = collect(tree).find((n) => n.tag === 'select'
+    && (n.kids || []).some((k) => k && k.props.value === 'none'));
+  const kdjReadout = async () => {
+    subSel2.props.onChange({ target: { value: 'rsi' } });
+    await settle(12);
+    const before = textCalls.length;
+    subSel2.props.onChange({ target: { value: 'kdj' } });
+    await settle(12);
+    return textCalls.slice(before).map(String).filter((t) => /^[KDJ] /.test(t));
+  };
+  const first = await kdjReadout();
+  const second = await kdjReadout();
+  check('同一批数据反复算 KDJ，读数一致（缓存没串味）',
+    first.length === 3 && JSON.stringify(first) === JSON.stringify(second), { first, second });
+  // 复原 MACD，后面的用例按默认副图继续
+  subSel2.props.onChange({ target: { value: 'macd' } });
+  await settle(12);
+}
+
+section('性能：悬停不重绘整张图（基准层离屏缓存 + 悬停层）');
+{
+  // 以前每动一下鼠标就把整张 K 线图（网格 / 成交量 / K 线 / 均线 / 日期轴，上千次绘图调用）
+  // 重画一遍。现在静态部分画进离屏 canvas 缓存，悬停只 drawImage + 叠十字光标那一层。
+  const flat = source.replace(/\s+/g, ' ');
+  check('有基准层缓存（按数据/尺寸/区间/成本做 key）',
+    /let klineBaseCache = null/.test(flat)
+    && /const baseKey = \[/.test(flat)
+    && /candlesId\(candles\), pxW, pxH, sub, viewStart, shown\.length/.test(flat), null);
+  check('K 线数据按数组本身编号（换数据缓存自动失效）',
+    /const klineCandlesIds = new WeakMap\(\)/.test(flat)
+    && /function candlesId\(candles\)/.test(flat), null);
+  check('静态层画进离屏 canvas 再 drawImage 贴回主画布',
+    /const paintBase = \(bx\) =>/.test(flat)
+    && /const octx = off\.getContext\('2d'\)/.test(flat)
+    && /ctx\.drawImage\(base\.canvas, 0, 0, width, height\)/.test(flat), null);
+  check('悬停层单独一个函数（均线数值块 / 副图读数 / 十字光标）',
+    /const paintHover = \(hx\) =>/.test(flat), null);
+  check('副图读数从曲线绘制里拆出来（读数随光标变，不能进静态层）',
+    /function drawSubReadout\(ctx, o\)/.test(flat)
+    && /readout: false/.test(flat), null);
+
+  // 功能层面：连动两次鼠标，每次主画布上的绘制次数都应该是「一次贴图 + 少量悬停层」，
+  // 而不是上千次（整图重绘）。基准层只在第一次建立后复用。
+  const kNode = collect(tree).find((n) => n.tag === 'canvas'
+    && typeof n.props.onMouseDown === 'function');
+  const kEl = kNode && kNode.props.ref ? kNode.props.ref.current : null;
+  check('找得到 K 线画布', !!kNode && !!kEl, null);
+  if (kNode && kEl) {
+    // 先移开鼠标，让状态回到「无悬停」，再开始计数
+    kNode.props.onMouseLeave({ type: 'mouseleave' });
+    await settle(10);
+    const moveTo = async (clientX) => {
+      const before = kEl.__drawCalls || 0;
+      const imgBefore = (kEl.__drawImages || []).length;
+      kNode.props.onMouseMove({ clientX, clientY: 120, currentTarget: kEl });
+      await settle(10);
+      return {
+        calls: (kEl.__drawCalls || 0) - before,
+        images: (kEl.__drawImages || []).length - imgBefore,
+      };
+    };
+    const m1 = await moveTo(300);
+    const m2 = await moveTo(420);
+    // 整图重绘是上千次；贴图 + 十字光标/读数只有几十次
+    check('悬停一次主画布只贴一次图（drawImage）', m1.images === 1 && m2.images === 1, { m1, m2 });
+    check('悬停时主画布不再整图重绘（绘制次数远少于整图）',
+      m1.calls < 200 && m2.calls < 200, { m1: m1.calls, m2: m2.calls });
+    // 直接验「复用」而不是只比次数：两次贴上去的必须是同一块离屏画布实例
+    const imgs = (kEl.__drawImages || []).map((a) => a[0]);
+    check('第二次悬停复用同一块基准层画布（不是重建）',
+      imgs.length >= 2 && imgs[imgs.length - 1] === imgs[imgs.length - 2], imgs.length);
+    // 基准层画在离屏画布上：主画布的调用里不该再出现 K 线柱/网格那些大批量 fillRect
+    const rectsBefore = rectCalls.length;
+    kNode.props.onMouseMove({ clientX: 520, clientY: 120, currentTarget: kEl });
+    await settle(10);
+    check('悬停时不重画 K 线柱/成交量（批量 fillRect 消失）',
+      rectCalls.length - rectsBefore < 20, rectCalls.length - rectsBefore);
+    kNode.props.onMouseLeave({ type: 'mouseleave' });
+    await settle(10);
+  }
 }
 
 section('K线框选放大（拖动选择时间区间）');
@@ -2410,6 +2831,29 @@ section('交易流水');
   await settle(6);
   check('空标的记账不抛错', err === null, err && err.message);
   check('空标的记账给出错误提示', /请填写股票代码或名称/.test(allText(tree)), null);
+
+  // 按标的分类：出现过多只标的时给筛选胶囊（全部 + 各标的）
+  const sfBtns = () => collect(tree).filter((n) => n.tag === 'button'
+    && String(n.props.className || '').includes('dst-sf'));
+  check('流水页出现标的筛选胶囊', sfBtns().length === 3, sfBtns().map((n) => allText(n.kids)));
+  check('筛选行有「全部」', sfBtns().some((n) => allText(n.kids).includes('全部')));
+  const paChip = sfBtns().find((n) => allText(n.kids).includes('平安银行'));
+  check('筛选行列出平安银行', !!paChip);
+  if (paChip) {
+    paChip.props.onClick({});
+    await settle(10);
+    const tbl = findByClass(tree, 'dst-table')[0];
+    const ttxt = tbl ? allText(tbl) : '';
+    check('选中平安银行后表里只剩它的流水', /平安银行/.test(ttxt) && !/贵州茅台/.test(ttxt), ttxt);
+    const rows = tbl && tbl.kids[1] ? tbl.kids[1].kids : [];
+    check('选中后表格只有 1 行流水', rows.length === 1, rows.length);
+    const allChip = sfBtns().find((n) => allText(n.kids).includes('全部'));
+    allChip.props.onClick({});
+    await settle(10);
+    const tbl2 = findByClass(tree, 'dst-table')[0];
+    check('点「全部」恢复两只标的的流水', /平安银行/.test(allText(tbl2)) && /贵州茅台/.test(allText(tbl2)), null);
+  }
+  check('筛选胶囊样式已声明', styleTags[0] && /\.dst-symfilter\{/.test(styleTags[0].textContent), null);
 }
 
 section('价格预警');
@@ -2422,6 +2866,24 @@ section('价格预警');
   check('显示已触发状态', /已触发/.test(txt), null);
   check('显示价格条件', /价格 >= 1700/.test(txt), null);
   check('显示涨跌幅条件', /涨跌幅 <= -3%/.test(txt), null);
+
+  // 按标的分类：筛选胶囊同时过滤预警表
+  const afBtns = () => collect(tree).filter((n) => n.tag === 'button'
+    && String(n.props.className || '').includes('dst-sf'));
+  check('预警页出现标的筛选胶囊', afBtns().length === 3, afBtns().map((n) => allText(n.kids)));
+  const pingChip = afBtns().find((n) => allText(n.kids).includes('平安银行'));
+  check('预警筛选行列出平安银行', !!pingChip);
+  if (pingChip) {
+    pingChip.props.onClick({});
+    await settle(10);
+    const tbl = findByClass(tree, 'dst-table')[0];
+    const at = tbl ? allText(tbl) : '';
+    check('选中平安银行后预警表只剩它的预警', /平安银行/.test(at) && !/贵州茅台/.test(at), at);
+    const allChip = afBtns().find((n) => allText(n.kids).includes('全部'));
+    allChip.props.onClick({});
+    await settle(10);
+    check('点「全部」恢复两条预警', /贵州茅台/.test(allText(findByClass(tree, 'dst-table')[0])), null);
+  }
 
   let err = null;
   try { clickText('加预警'); } catch (e) { err = e; }
@@ -2462,6 +2924,25 @@ section('预警触发历史');
   check('历史表显示触发时的价格', /-2\.67%/.test(htxt) && /1,704\.20/.test(htxt), htxt);
   check('当天记录写成「今天 HH:MM」', /今天 \d{2}:\d{2}/.test(htxt), htxt);
   check('跨天记录写成「MM-DD HH:MM」', /\d{2}-\d{2} \d{2}:\d{2}/.test(htxt), htxt);
+
+  // 触发历史也跟着标的筛选走
+  const histChip = () => collect(tree).find((n) => n.tag === 'button'
+    && String(n.props.className || '').includes('dst-sf')
+    && allText(n.kids).includes('平安银行'));
+  check('历史块里也有筛选胶囊', !!histChip(), null);
+  if (histChip()) {
+    histChip().props.onClick({});
+    await settle(10);
+    const ftbl = findByClass(tree, 'dst-history-table')[0];
+    const ftxt = ftbl ? allText(ftbl) : '';
+    check('筛选平安银行后历史表只剩它的记录', /平安银行/.test(ftxt) && !/贵州茅台/.test(ftxt), ftxt);
+    check('入口条数跟着变（展开态显示「收起历史」）', /收起历史 \(1\)/.test(allText(tree)), null);
+    const allChip = collect(tree).find((n) => n.tag === 'button'
+      && String(n.props.className || '').includes('dst-sf') && allText(n.kids).includes('全部'));
+    allChip.props.onClick({});
+    await settle(10);
+    check('恢复「全部」后两条历史都在', /收起历史 \(2\)/.test(allText(tree)), null);
+  }
 
   const clearBtn = collect(tree).find((n) => n.tag === 'button'
     && String(n.props.title || '').includes('清空所有触发记录'));
@@ -2642,6 +3123,27 @@ section('旧宿主不认新设置项时的提示');
   check('再点一次关闭盘前计划', toggleRow('盘前计划'));
   await settle(12);
   check('盘前计划恢复关闭', STATE.settings.autoPlanEnabled === false, STATE.settings.autoPlanEnabled);
+
+  // 空闲透明：默认开（行情条空闲时无底色边框），关掉后条上挂 dst-solid
+  check('设置页有「空闲透明」开关', allText(tree).includes('空闲透明'), null);
+  check('空闲透明默认开启', STATE.settings.barTransparent !== false, STATE.settings.barTransparent);
+  check('关掉空闲透明', toggleRow('空闲透明'));
+  await settle(12);
+  check('空闲透明写回设置', STATE.settings.barTransparent === false, STATE.settings.barTransparent);
+  check('重新打开空闲透明', toggleRow('空闲透明'));
+  await settle(12);
+  check('空闲透明恢复开启', STATE.settings.barTransparent !== false, STATE.settings.barTransparent);
+  check('dst-solid 的 CSS 已声明', styleTags[0] && /\.dst-bar\.dst-solid\{/.test(styleTags[0].textContent), null);
+
+  // 停靠会话视图：默认自由拖动，切开关写回设置
+  check('设置页有「停靠会话视图」开关', allText(tree).includes('停靠会话视图'), null);
+  check('设置页切到已停靠', toggleRow('停靠会话视图'));
+  await settle(12);
+  check('设置页写回 barDocked=true', STATE.settings.barDocked === true, STATE.settings.barDocked);
+  check('再点恢复自由拖动', toggleRow('停靠会话视图'));
+  await settle(12);
+  check('恢复 barDocked=false', STATE.settings.barDocked === false, STATE.settings.barDocked);
+
   const before = STATE.settings.showKline;
   DROP_UNKNOWN_SETTINGS = true; // 宿主装的是旧版本，showKline 这个键它不认识
   check('点一下「K线图」的开关', toggleRow('K线图'));
@@ -2809,6 +3311,8 @@ section('AI 分析');
     ['3日K', '5日K', '周K', '月K'].every((l) => allText(tree).includes(l)), null);
   check('数据窗口有资金流/成分股/份额勾选',
     ['资金流', '成分股', '份额'].every((l) => allText(tree).includes(l)), null);
+  check('数据窗口有板块/基本面勾选',
+    ['板块', '基本面'].every((l) => allText(tree).includes(l)), null);
   check('额外要求输入框存在',
     collect(tree).some((n) => n.tag === 'input' && /额外要求/.test(String(n.props.placeholder || ''))), null);
   check('未开始时有说明文案', /让模型做一次复盘/.test(allText(tree)), null);
@@ -2824,7 +3328,8 @@ section('AI 分析');
     `${req.provider}/${req.model}`);
   check('默认走简版', req.style === 'short', req.style);
   check('请求里带上数据勾选', !!req.include && req.include.kline === true && req.include.indexes === true
-    && req.include.flow === true && req.include.holdings === true && req.include.share === true,
+    && req.include.flow === true && req.include.holdings === true && req.include.share === true
+    && req.include.sector === true && req.include.fund === true,
     JSON.stringify(req.include));
 
   // —— v2：结构化计划卡片 + 自动设预警说明 ——
@@ -2892,6 +3397,12 @@ section('AI 分析');
   daysSel().props.onChange({ target: { value: '3' } });
   await settle(10);
   check('分时天数写进设置', STATE.settings.aiTrendDays === 3, STATE.settings.aiTrendDays);
+  check('板块/基本面开关默认开',
+    !!aiInput('板块') && aiInput('板块').props.checked === true
+    && !!aiInput('基本面') && aiInput('基本面').props.checked === true, null);
+  aiInput('基本面').props.onChange({ target: { checked: false } });
+  await settle(10);
+  check('关掉基本面写进设置', STATE.settings.aiFund === false, STATE.settings.aiFund);
 
   const before2 = analyzeLog.length;
   check('再点「重新分析」', clickText('重新分析'));
@@ -2900,6 +3411,9 @@ section('AI 分析');
   check('重新分析的请求带上多周期', Array.isArray(req2.periods) && req2.periods.join(',') === 'day,day3,week',
     JSON.stringify(req2.periods));
   check('重新分析的请求带上分时天数', req2.trendDays === 3, req2.trendDays);
+  check('关掉基本面后请求里 include.fund 为 false',
+    !!req2.include && req2.include.fund === false && req2.include.sector === true,
+    JSON.stringify(req2.include));
   check('分析完成后历史多了一条', analyzeLog.length === before2 + 1, analyzeLog.length);
 
   // —— 切走标签再切回来，正文要还在（状态已提升到模块级单例）——
@@ -3064,6 +3578,25 @@ section('AI 分析');
   check('点开后通知消失', findByClass(tree, 'dst-notice').length === 0,
     findByClass(tree, 'dst-notice').length);
   AI_HISTORY.shift();
+
+  // 后台通知轮询会跟着面板开合换频率：开着 15 秒（用户正在看 AI 页），
+  // 收起降到 60 秒（通知照样弹，但不必为「刚跑完的分析」把后台请求打太密）。
+  const msNow = () => [...intervals.values()].map((x) => x.ms);
+  check('面板开着时 AI 历史 15s 一轮', msNow().includes(15000), msNow());
+  const brandToShut = collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-brand'
+    && typeof n.props.onClick === 'function');
+  check('能收起面板（用来验证降频）', !!brandToShut);
+  if (brandToShut) {
+    brandToShut.props.onClick();
+    await settle(12);
+    check('面板收起后降到 60s 一轮', msNow().includes(60000), msNow());
+    check('收起后不再有 15s 的历史轮询', !msNow().includes(15000), msNow());
+    const brandToOpen = collect(tree).find((n) => String(n.props && n.props.className || '') === 'dst-brand'
+      && typeof n.props.onClick === 'function');
+    if (brandToOpen) brandToOpen.props.onClick();
+    await settle(12);
+    check('重新展开面板恢复 15s', msNow().includes(15000), msNow());
+  }
 }
 
 section('组件开关（设置 → 显示）');
@@ -3272,6 +3805,8 @@ section('折叠态');
       check('面板已展开', findByClass(tree, 'dst-panel').length === 1, findByClass(tree, 'dst-panel').length);
       // 模拟「鼠标在界面里移动」——触发条与根节点的 enter/leave，不应改变渲染
       const bar = findByClass(tree, 'dst-bar')[0];
+      check('面板展开时行情条挂 dst-open（保持实心）',
+        bar && String(bar.props.className || '').includes('dst-open'), bar && bar.props.className);
       if (bar && typeof bar.props.onMouseLeave === 'function') bar.props.onMouseLeave({ type: 'mouseleave' });
       await new Promise((r) => setTimeout(r, 320));
       await settle(12);
